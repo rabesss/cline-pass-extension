@@ -1,7 +1,7 @@
 {
   "name": "@rabesss/cline-pass-extension",
-  "version": "0.1.0",
-  "description": "Pi and OMP extension for using Cline Pass through CLIProxyAPI.",
+  "version": "0.2.0",
+  "description": "Dependency-free Pi and OMP provider extension for Cline Pass.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/rabesss/cline-pass-extension#readme",
@@ -15,32 +15,40 @@
   "keywords": [
     "cline",
     "cline-pass",
-    "cliproxyapi",
     "omp-plugin",
+    "omp-extension",
     "pi-package",
-    "pi-extension"
+    "pi-extension",
+    "provider"
   ],
-  "exports": "./src/extension.js",
+  "exports": "./dist/extension.js",
+  "types": "./dist/extension.d.ts",
   "files": [
-    "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check src/core.js && node --check src/extension.js && node --test",
+    "build": "tsc -p tsconfig.json",
+    "check": "npm run build && node --test",
+    "prepare": "npm run build",
     "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "typescript": "^5.8.3"
   },
   "engines": {
     "node": ">=18"
   },
   "omp": {
     "extensions": [
-      "./src/extension.js"
+      "./dist/extension.js"
     ]
   },
   "pi": {
     "extensions": [
-      "./src/extension.js"
+      "./dist/extension.js"
     ]
   }
 }
