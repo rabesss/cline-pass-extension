@@ -4,16 +4,16 @@ Dependency-free Pi and OMP provider extension for Cline Pass.
 
 This package talks directly to Cline's OpenAI-compatible API. It does not use CLIProxyAPI.
 
-For reliable auth, create a Cline API key and run OMP/Pi `/login` for `Cline Pass`, or set `CLINE_PASS_API_KEY`. Existing Cline local auth can be inspected with `/clinepass doctor`; opt into importing it with `CLINE_PASS_IMPORT_LOCAL=1` only if `/clinepass verify` succeeds on your machine.
+For reliable auth, create a Cline API key and run OMP/Pi `/login` for `Cline Pass`, or set `CLINE_PASS_API_KEY`. Existing Cline local auth can be inspected with `/clinepass doctor`; local Cline account-token reuse is disabled by default and can be tried with `CLINE_PASS_IMPORT_LOCAL=1`.
 
 ## Install
 
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.0
+omp plugin install github:rabesss/cline-pass-extension#v0.2.1
 ```
 
 ```bash
-pi install git:github.com/rabesss/cline-pass-extension@v0.2.0
+pi install git:github.com/rabesss/cline-pass-extension@v0.2.1
 ```
 
 For local development:
@@ -21,6 +21,14 @@ For local development:
 ```bash
 omp -e /path/to/cline-pass-extension
 pi -e /path/to/cline-pass-extension
+```
+
+To make the provider appear in OMP `/login`, install or link the plugin first:
+
+```bash
+omp plugin install github:rabesss/cline-pass-extension#v0.2.1
+# or, from this checkout:
+omp plugin link .
 ```
 
 ## Provider

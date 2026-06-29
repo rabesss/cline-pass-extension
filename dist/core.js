@@ -284,7 +284,17 @@ export async function verifyClinePass(options = {}, env = process.env) {
     }
     const model = options.model || env.CLINE_PASS_MODEL || DEFAULT_MODEL;
     const baseUrl = options.baseUrl || env.CLINE_PASS_API_BASE || CLINE_API_BASE;
-    const token = await readClinePassAccessToken({ env, baseUrl, fetchImpl });
+    const token = await resolveRuntimeApiKey({ baseUrl, fetchImpl }, env);
+    if (!token) {
+        return {
+            ok: false,
+            command: "verify",
+            status: 0,
+            detail: missingApiKeyMessage(),
+            model,
+            baseUrl,
+        };
+    }
     const sentinel = "CLINE_PASS_EXTENSION_OK";
     const response = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
@@ -467,7 +477,7 @@ export function createStreamClinePass(deps = {}) {
             try {
                 const apiKey = await resolveRuntimeApiKey({ ...options, baseUrl: apiBase, fetchImpl });
                 if (!apiKey) {
-                    throw new Error("No Cline API key. Run /login and paste a Cline API key, or set CLINE_PASS_API_KEY.");
+                    throw new Error(missingApiKeyMessage());
                 }
                 stream.push({ type: "start", partial: output });
                 const payload = {
@@ -667,6 +677,8 @@ async function resolveRuntimeApiKey(options = {}, env = process.env) {
     const envAccessToken = stringValue(env.CLINE_PASS_ACCESS_TOKEN);
     if (envAccessToken)
         return envAccessToken;
+    if (env.CLINE_PASS_IMPORT_LOCAL !== "1")
+        return "";
     const readOptions = {
         env,
         persist: false,
@@ -676,6 +688,9 @@ async function resolveRuntimeApiKey(options = {}, env = process.env) {
     if (options.fetchImpl)
         readOptions.fetchImpl = options.fetchImpl;
     return readClinePassAccessToken(readOptions).catch(() => "");
+}
+function missingApiKeyMessage() {
+    return "No Cline API key. Run /login and paste a Cline API key, or set CLINE_PASS_API_KEY. Set CLINE_PASS_IMPORT_LOCAL=1 only if you want to try an existing local Cline account token.";
 }
 function isEnvVarReference(value) {
     return [CLINE_PASS_API_KEY_ENV_VAR, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR].includes(value);

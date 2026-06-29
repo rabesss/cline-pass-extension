@@ -254,6 +254,40 @@ test("verifyClinePass returns a structured failure for non-JSON success response
   assert.match(report.detail, /not valid JSON/);
 });
 
+test("verifyClinePass requires explicit local Cline token import", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
+  const source = path.join(tempDir, "providers.json");
+  await fs.writeFile(source, JSON.stringify(providerSettings("token-1")), "utf8");
+  let called = false;
+
+  const missing = await verifyClinePass(
+    {
+      fetchImpl: async () => {
+        called = true;
+        return jsonResponse({});
+      },
+    },
+    { CLINE_PROVIDERS_JSON: source },
+  );
+
+  assert.equal(called, false);
+  assert.equal(missing.ok, false);
+  assert.match(missing.detail, /No Cline API key/);
+
+  const imported = await verifyClinePass(
+    {
+      fetchImpl: async (url, init) => {
+        called = true;
+        assert.equal(init.headers.Authorization, "Bearer token-1");
+        return jsonResponse({ choices: [{ message: { content: "CLINE_PASS_EXTENSION_OK" } }] });
+      },
+    },
+    { CLINE_PROVIDERS_JSON: source, CLINE_PASS_IMPORT_LOCAL: "1" },
+  );
+
+  assert.equal(imported.ok, true);
+});
+
 test("createStreamClinePass maps clean selector ids and streams text deltas", async () => {
   let request;
   const stream = createStreamClinePass({
@@ -281,14 +315,14 @@ test("createStreamClinePass maps clean selector ids and streams text deltas", as
   assert.equal(events.at(-1).type, "done");
 });
 
-test("createStreamClinePass uses injected fetch and base URL for token refresh fallback", async () => {
+test("createStreamClinePass uses injected fetch and base URL for explicit local token import", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
   const source = path.join(tempDir, "providers.json");
   await fs.writeFile(source, JSON.stringify(providerSettings("old-token", Date.now() - 60_000)), "utf8");
   const urls = [];
 
   const events = [];
-  await withProcessEnv({ CLINE_PROVIDERS_JSON: source, CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_ACCESS_TOKEN: "" }, async () => {
+  await withProcessEnv({ CLINE_PROVIDERS_JSON: source, CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_ACCESS_TOKEN: "", CLINE_PASS_IMPORT_LOCAL: "1" }, async () => {
     const stream = createStreamClinePass({
       baseUrl: "https://cline.test/api/v1",
       fetchImpl: async (url, init) => {
@@ -318,6 +352,32 @@ test("createStreamClinePass uses injected fetch and base URL for token refresh f
 
   assert.deepEqual(urls, ["https://cline.test/api/v1/auth/refresh", "https://cline.test/api/v1/chat/completions"]);
   assert.equal(events.at(-1).type, "done");
+});
+
+test("createStreamClinePass does not use local Cline tokens unless explicitly opted in", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
+  const source = path.join(tempDir, "providers.json");
+  await fs.writeFile(source, JSON.stringify(providerSettings("token-1")), "utf8");
+  let called = false;
+  const events = [];
+
+  await withProcessEnv({ CLINE_PROVIDERS_JSON: source, CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_ACCESS_TOKEN: "", CLINE_PASS_IMPORT_LOCAL: "" }, async () => {
+    const stream = createStreamClinePass({
+      fetchImpl: async () => {
+        called = true;
+        return sseResponse([]);
+      },
+    })(
+      { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+      { messages: [{ role: "user", content: "hi" }] },
+    );
+
+    for await (const event of stream) events.push(event);
+  });
+
+  assert.equal(called, false);
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /No Cline API key/);
 });
 
 test("createStreamClinePass rejects tool results without a matching assistant tool call", async () => {
