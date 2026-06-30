@@ -46,13 +46,13 @@ If first-run onboarding shows only built-in providers, skip setup and use
 OMP:
 
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.6
+omp plugin install github:rabesss/cline-pass-extension#v0.2.7
 ```
 
 Pi:
 
 ```bash
-pi install git:github.com/rabesss/cline-pass-extension@v0.2.6
+pi install git:github.com/rabesss/cline-pass-extension@v0.2.7
 ```
 
 ## Authentication
