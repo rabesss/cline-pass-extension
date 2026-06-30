@@ -2,41 +2,83 @@
 
 Dependency-free Pi and OMP provider extension for Cline Pass.
 
-This package talks directly to Cline's OpenAI-compatible API. It does not use CLIProxyAPI.
+It registers a `cline-pass` provider backed by Cline's OpenAI-compatible API.
+Sign in with `/login` and choose `Cline Pass`.
 
-For auth, run OMP/Pi `/login` for `Cline Pass` and sign in with your Cline account in the browser. API keys still work through the `/login` fallback or `CLINE_PASS_API_KEY`. Existing Cline local auth can be inspected with `/clinepass doctor`; local Cline account-token reuse is disabled by default and can be tried with `CLINE_PASS_IMPORT_LOCAL=1`.
+## Run From Source
 
-## Custom Extension
-
-Build once, then load the extension explicitly:
+Build once:
 
 ```bash
 git clone https://github.com/rabesss/cline-pass-extension.git
 cd cline-pass-extension
 npm install
 npm run build
+```
+
+Load it in OMP:
+
+```bash
 omp -e ./dist/extension.js
 ```
+
+Or load it in Pi:
 
 ```bash
 pi -e ./dist/extension.js
 ```
 
-After OMP/Pi starts with `-e`, run `/login` and select `Cline Pass`. First-run onboarding may show only built-in providers; skip setup and use `/login` in the normal session.
+If first-run onboarding shows only built-in providers, skip setup and use
+`/login` in the normal session.
 
-## Optional Install
+## Install As A Plugin
+
+OMP:
 
 ```bash
 omp plugin install github:rabesss/cline-pass-extension#v0.2.3
 ```
 
+Pi:
+
 ```bash
 pi install git:github.com/rabesss/cline-pass-extension@v0.2.3
 ```
 
-## Provider
+## Authentication
 
-The extension registers provider `cline-pass` with Cline's direct API:
+Run `/login`, select `Cline Pass`, and sign in with your Cline account in the
+browser. API keys are also supported through the `/login` fallback or
+`CLINE_PASS_API_KEY`.
+
+`/login` uses the same Cline account device authorization flow as the Cline CLI,
+then stores the resulting provider credentials in OMP/Pi. Set
+`CLINE_PASS_LOGIN_MODE=api-key` to skip browser sign-in and paste an API key
+directly.
+
+Default token lookup order:
+
+```text
+CLINE_PASS_API_KEY
+CLINE_API_KEY
+CLINE_PASS_ACCESS_TOKEN
+saved OMP/Pi /login credential
+```
+
+When `CLINE_PASS_IMPORT_LOCAL=1` is set, the extension can also inspect local
+Cline settings:
+
+```text
+CLINE_PROVIDERS_JSON
+CLINE_DATA_DIR/settings/providers.json
+~/.cline/data/settings/providers.json
+```
+
+Use `/clinepass doctor` to check which auth sources are visible.
+
+## Provider And Models
+
+The extension registers provider `cline-pass`:
 
 ```text
 https://api.cline.bot/api/v1
@@ -51,20 +93,6 @@ cline-pass/deepseek-v4-pro
 cline-pass/qwen3.7-max
 ```
 
-Token lookup order:
-
-```text
-CLINE_PASS_API_KEY
-CLINE_API_KEY
-CLINE_PASS_ACCESS_TOKEN
-CLINE_PROVIDERS_JSON, if CLINE_PASS_IMPORT_LOCAL=1
-CLINE_DATA_DIR/settings/providers.json, if CLINE_PASS_IMPORT_LOCAL=1
-~/.cline/data/settings/providers.json, if CLINE_PASS_IMPORT_LOCAL=1
-saved OMP/Pi /login credential
-```
-
-`/login` uses the same Cline account device authorization flow as the Cline CLI, then stores the resulting provider credentials in OMP/Pi. Set `CLINE_PASS_LOGIN_MODE=api-key` only if you want to skip browser sign-in and paste an API key directly.
-
 ## Commands
 
 ```text
@@ -73,7 +101,8 @@ saved OMP/Pi /login credential
 /clinepass verify
 ```
 
-`doctor` checks whether usable auth or local Cline settings are visible. `verify` sends one tiny direct chat-completion request to Cline's API.
+`doctor` checks whether usable auth or local Cline settings are visible.
+`verify` sends a tiny request to Cline's API.
 
 Useful options:
 
@@ -85,4 +114,7 @@ Useful options:
 
 ## Safety
 
-The extension never prints Cline access or refresh tokens in command output. `/login` stores only the Cline account or API-key credential returned through OMP/Pi; local Cline provider tokens are not copied unless you explicitly set `CLINE_PASS_IMPORT_LOCAL=1`.
+The extension never prints Cline access or refresh tokens in command output.
+`/login` stores only the Cline account or API-key credential returned through
+OMP/Pi. Local Cline provider tokens are only read when you explicitly set
+`CLINE_PASS_IMPORT_LOCAL=1`.
