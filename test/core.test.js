@@ -34,6 +34,8 @@ test("buildProviderConfig registers direct Cline API models", () => {
   assert.equal(config.authHeader, true);
   assert.equal(typeof config.streamSimple, "function");
   assert.ok(config.models.some(model => model.id === "glm-5.2" && model.wireId === "cline-pass/glm-5.2"));
+  assert.equal(config.models.find(model => model.id === "glm-5.2")?.thinkingLevelMap?.xhigh, "xhigh");
+  assert.equal(config.models.find(model => model.id === "glm-5.2")?.thinkingLevelMap?.minimal, null);
 });
 
 test("README lists every registered Cline Pass selector", async () => {
@@ -158,6 +160,33 @@ test("readClinePassAccessToken refreshes and persists expired Cline tokens", asy
   assert.equal(provider.auth.accessToken, "workos:new-token");
   assert.equal(provider.auth.refreshToken, "new-refresh-token");
   assert.equal(provider.auth.accountId, "acct_new");
+});
+
+test("readClinePassAccessToken refresh preserves providers.json symlinks", async () => {
+  const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-target-"));
+  const linkDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-link-"));
+  const target = path.join(targetDir, "providers.json");
+  const link = path.join(linkDir, "cline-providers.json");
+  await fs.writeFile(target, JSON.stringify(providerSettings("old-token", Date.now() - 60_000)), "utf8");
+  await fs.symlink(target, link);
+
+  const token = await readClinePassAccessToken({
+    env: { CLINE_PROVIDERS_JSON: link },
+    baseUrl: "https://cline.test/api/v1",
+    fetchImpl: async () => jsonResponse({
+      success: true,
+      data: {
+        accessToken: "new-token",
+        refreshToken: "new-refresh-token",
+        expiresAt: Date.now() + 3_600_000,
+      },
+    }),
+  });
+
+  assert.equal(token, "workos:new-token");
+  assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
+  const persisted = JSON.parse(await fs.readFile(target, "utf8"));
+  assert.equal(findClinePassProvider(persisted).auth.accessToken, "workos:new-token");
 });
 
 test("refreshClinePassAuth reports refresh failures without token details", async () => {
@@ -404,6 +433,39 @@ test("verifyClinePass posts directly to Cline chat completions", async () => {
   assert.equal(JSON.parse(request.init.body).model, "cline-pass/glm-5.2");
 });
 
+test("verifyClinePass unwraps Cline success envelopes", async () => {
+  const report = await verifyClinePass(
+    {
+      fetchImpl: async () => jsonResponse({
+        success: true,
+        data: {
+          choices: [{ message: { content: "CLINE_PASS_EXTENSION_OK" } }],
+        },
+      }),
+    },
+    { CLINE_PASS_API_KEY: "token-1" },
+  );
+
+  assert.equal(report.ok, true);
+});
+
+test("verifyClinePass reports Cline failure envelopes safely", async () => {
+  const report = await verifyClinePass(
+    {
+      fetchImpl: async () => jsonResponse({
+        success: false,
+        code: "invalid_auth",
+        message: "token expired token-123456789012345678901234",
+      }),
+    },
+    { CLINE_PASS_API_KEY: "token-1" },
+  );
+
+  assert.equal(report.ok, false);
+  assert.match(report.detail, /invalid_auth/);
+  assert.doesNotMatch(report.detail, /token-123456789012345678901234/);
+});
+
 test("verifyClinePass returns a structured failure for non-JSON success responses", async () => {
   const report = await verifyClinePass(
     {
@@ -454,6 +516,28 @@ test("verifyClinePass requires explicit local Cline token import", async () => {
   );
 
   assert.equal(imported.ok, true);
+});
+
+test("verifyClinePass reports local import errors without calling upstream", async () => {
+  let called = false;
+  const report = await verifyClinePass(
+    {
+      fetchImpl: async () => {
+        called = true;
+        return jsonResponse({});
+      },
+    },
+    {
+      CLINE_PASS_IMPORT_LOCAL: "1",
+      CLINE_PROVIDERS_JSON: "/tmp/cline-pass-extension-missing-providers.json",
+      [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: "/tmp/cline-pass-extension-missing-agent.db",
+    },
+  );
+
+  assert.equal(called, false);
+  assert.equal(report.ok, false);
+  assert.match(report.detail, /Unable to resolve imported local Cline credential/);
+  assert.match(report.detail, /providers\.json/);
 });
 
 test("createStreamClinePass maps clean selector ids and streams text deltas", async () => {
@@ -517,6 +601,28 @@ test("createStreamClinePass omits reasoning effort when reasoning is off", async
   assert.equal("reasoning_effort" in payload, false);
 });
 
+test("createStreamClinePass omits unsupported minimal reasoning effort", async () => {
+  let payload;
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  })(
+    {
+      id: "glm-5.2",
+      provider: "cline-pass",
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
+      maxTokens: 128,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1", reasoning: "minimal", onPayload: body => { payload = body; } },
+  );
+
+  for await (const _event of stream) {}
+
+  assert.equal("reasoning_effort" in payload, false);
+});
+
 test("createStreamClinePass emits streamed reasoning as thinking blocks", async () => {
   const stream = createStreamClinePass({
     fetchImpl: async () => sseResponse([
@@ -571,6 +677,48 @@ test("createStreamClinePass accepts OMP OAuth credential JSON blobs", async () =
   assert.equal(request.url, "https://api.cline.bot/api/v1/chat/completions");
   assert.equal(request.init.headers.Authorization, "Bearer workos:json-token");
   assert.equal(events.at(-1).type, "done");
+});
+
+test("createStreamClinePass unwraps Cline success envelopes in JSON fallback", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => jsonResponse({
+      success: true,
+      data: {
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      },
+    }),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.deepEqual(events.filter(event => event.type === "text_delta").map(event => event.delta), ["ok"]);
+  assert.equal(events.at(-1).type, "done");
+});
+
+test("createStreamClinePass reports non-SSE Cline error envelopes safely", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => rawBodyResponse(JSON.stringify({
+      success: false,
+      code: "invalid_auth",
+      message: "token expired token-123456789012345678901234",
+    })),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /invalid_auth/);
+  assert.doesNotMatch(error.error.errorMessage, /token-123456789012345678901234/);
 });
 
 test("createStreamClinePass falls back to saved OMP OAuth credentials when apiKey is a placeholder", async () => {
@@ -682,6 +830,37 @@ test("createStreamClinePass does not use local Cline tokens unless explicitly op
   assert.match(error.error.errorMessage, /No Cline Pass credential/);
 });
 
+test("createStreamClinePass reports local import errors without calling upstream", async () => {
+  let called = false;
+  const events = [];
+
+  await withProcessEnv({
+    CLINE_PASS_IMPORT_LOCAL: "1",
+    CLINE_PROVIDERS_JSON: "/tmp/cline-pass-extension-missing-providers.json",
+    [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: "/tmp/cline-pass-extension-missing-agent.db",
+    CLINE_PASS_API_KEY: "",
+    CLINE_API_KEY: "",
+    CLINE_PASS_ACCESS_TOKEN: "",
+  }, async () => {
+    const stream = createStreamClinePass({
+      fetchImpl: async () => {
+        called = true;
+        return sseResponse([]);
+      },
+    })(
+      { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+      { messages: [{ role: "user", content: "hi" }] },
+    );
+
+    for await (const event of stream) events.push(event);
+  });
+
+  assert.equal(called, false);
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /Unable to resolve imported local Cline credential/);
+  assert.match(error.error.errorMessage, /providers\.json/);
+});
+
 test("createStreamClinePass rejects tool results without a matching assistant tool call", async () => {
   let called = false;
   const stream = createStreamClinePass({
@@ -791,6 +970,23 @@ function jsonResponse(payload, init = {}) {
     status: init.status || 200,
     async json() {
       return payload;
+    },
+  };
+}
+
+function rawBodyResponse(body, init = {}) {
+  const encoder = new TextEncoder();
+  return {
+    ok: init.status ? init.status >= 200 && init.status < 300 : true,
+    status: init.status || 200,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(body));
+        controller.close();
+      },
+    }),
+    async json() {
+      return JSON.parse(body);
     },
   };
 }

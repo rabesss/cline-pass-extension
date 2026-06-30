@@ -51,6 +51,7 @@ export interface ClinePassModel {
   wireId: string;
   name: string;
   reasoning: boolean;
+  thinkingLevelMap?: Partial<Record<ReasoningLevel, string | null>>;
   input: string[];
   cost: Cost;
   contextWindow: number;
@@ -345,6 +346,7 @@ export const CLINE_PASS_MODELS: ClinePassModel[] = ([
   wireId,
   name,
   reasoning: true,
+  thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128000,
@@ -669,11 +671,12 @@ export async function readProviderSettings(providersPath: string): Promise<Cline
 }
 
 export async function writeProviderSettings(providersPath: string, settings: ClineSettings): Promise<void> {
-  const tmpPath = `${providersPath}.${process.pid}.${Date.now()}.tmp`;
+  const targetPath = await fs.realpath(providersPath).catch(() => providersPath);
+  const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
   const mode = 0o600;
   await fs.writeFile(tmpPath, `${JSON.stringify(settings, null, 2)}\n`, { mode });
-  await fs.rename(tmpPath, providersPath);
-  await fs.chmod(providersPath, mode);
+  await fs.rename(tmpPath, targetPath);
+  await fs.chmod(targetPath, mode);
 }
 
 export function findClinePassProvider(settings: ClineSettings): (ClineProviderSettings & { auth?: ClineProviderAuth }) | undefined {
@@ -776,7 +779,19 @@ export async function verifyClinePass(options: VerifyOptions = {}, env: Env = pr
 
   const model = options.model || env.CLINE_PASS_MODEL || DEFAULT_MODEL;
   const baseUrl = options.baseUrl || env.CLINE_PASS_API_BASE || CLINE_API_BASE;
-  const token = await resolveRuntimeApiKey({ baseUrl, fetchImpl }, env);
+  let token: string;
+  try {
+    token = await resolveRuntimeApiKey({ baseUrl, fetchImpl }, env);
+  } catch (error) {
+    return {
+      ok: false,
+      command: "verify",
+      status: 0,
+      detail: safeError(error),
+      model,
+      baseUrl,
+    };
+  }
   if (!token) {
     return {
       ok: false,
@@ -816,13 +831,26 @@ export async function verifyClinePass(options: VerifyOptions = {}, env: Env = pr
     };
   }
 
-  const payload = await response.json().catch(() => undefined);
-  if (payload === undefined) {
+  const rawPayload = await response.json().catch(() => undefined);
+  if (rawPayload === undefined) {
     return {
       ok: false,
       command: "verify",
       status: response.status,
       detail: "model responded, but the verification response was not valid JSON",
+      model,
+      baseUrl,
+    };
+  }
+  let payload: JsonRecord;
+  try {
+    payload = unwrapClineResponsePayload(rawPayload);
+  } catch (error) {
+    return {
+      ok: false,
+      command: "verify",
+      status: response.status,
+      detail: safeError(error),
       model,
       baseUrl,
     };
@@ -1119,8 +1147,9 @@ async function consumeOpenAINonStreamingFallback(
   stream: ClinePassEventSink,
   model: RuntimeModel,
 ): Promise<StreamConsumeResult> {
-  const data = await response.json().catch(() => undefined);
-  if (!data) throw new Error("Cline API returned a streaming response without a readable body.");
+  const rawData = await response.json().catch(() => undefined);
+  if (!rawData) throw new Error("Cline API returned a streaming response without a readable body.");
+  const data = unwrapClineResponsePayload(rawData);
 
   applyUsage(output.usage, data?.usage, model);
   const message = data?.choices?.[0]?.message || {};
@@ -1180,6 +1209,7 @@ async function* readOpenAISsePayloads(body: ReadableStream<Uint8Array>): AsyncGe
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let sawPayload = false;
 
   try {
     while (true) {
@@ -1188,11 +1218,20 @@ async function* readOpenAISsePayloads(body: ReadableStream<Uint8Array>): AsyncGe
       buffer += decoder.decode(value, { stream: true });
       const parsed = consumeSseLines(buffer);
       buffer = parsed.rest;
+      if (parsed.payloads.length > 0) sawPayload = true;
       yield* parsed.payloads;
     }
 
     buffer += decoder.decode();
-    if (buffer.trim()) yield* consumeSseLines(`${buffer}\n`, true).payloads;
+    if (buffer.trim()) {
+      const parsed = consumeSseLines(`${buffer}\n`, true);
+      if (parsed.payloads.length > 0) {
+        sawPayload = true;
+        yield* parsed.payloads;
+      } else if (!sawPayload) {
+        throw nonSseStreamError(buffer);
+      }
+    }
   } finally {
     reader.releaseLock();
   }
@@ -1236,7 +1275,11 @@ async function resolveRuntimeApiKey(options: RuntimeApiKeyOptions = {}, env: Env
     };
     if (options.baseUrl) readOptions.baseUrl = options.baseUrl;
     if (options.fetchImpl) readOptions.fetchImpl = options.fetchImpl;
-    return readClinePassAccessToken(readOptions).catch(() => "");
+    try {
+      return await readClinePassAccessToken(readOptions);
+    } catch (error) {
+      throw new Error(`Unable to resolve imported local Cline credential: ${safeError(error)}`);
+    }
   }
   const stored = await readOmpSavedClinePassCredentials(env).catch(() => undefined);
   if (stored) {
@@ -1244,7 +1287,12 @@ async function resolveRuntimeApiKey(options: RuntimeApiKeyOptions = {}, env: Env
     const refreshOptions: RefreshCredentialsOptions = {};
     if (options.baseUrl) refreshOptions.baseUrl = options.baseUrl;
     if (options.fetchImpl) refreshOptions.fetchImpl = options.fetchImpl;
-    const refreshed = await refreshClinePassCredentials(stored, refreshOptions).catch(() => undefined);
+    let refreshed: Credentials;
+    try {
+      refreshed = await refreshClinePassCredentials(stored, refreshOptions);
+    } catch (error) {
+      throw new Error(`Unable to refresh saved Cline Pass credential: ${safeError(error)}`);
+    }
     if (refreshed?.access) return refreshed.access;
   }
   return "";
@@ -1495,6 +1543,39 @@ function clineHTTPErrorMessage(status: number, body?: JsonRecord): string {
   if (status === 401) return "Cline API returned HTTP 401. Run /login to sign in with Cline or provide a Cline API key.";
   const detail = stringValue(body?.error) || stringValue(body?.message);
   return detail ? `Cline API returned HTTP ${status}: ${sanitizeErrorDetail(detail)}` : `Cline API returned HTTP ${status}`;
+}
+
+function unwrapClineResponsePayload(payload: unknown): JsonRecord {
+  const data = payload && typeof payload === "object" ? payload as JsonRecord : {};
+  if (typeof data.success !== "boolean") return data;
+  if (!data.success) {
+    throw new Error(`Cline API returned an error envelope: ${clineEnvelopeErrorDetail(data)}`);
+  }
+  const nested = data.data;
+  if (!nested || typeof nested !== "object") {
+    throw new Error("Cline API returned a success envelope without response data.");
+  }
+  return nested as JsonRecord;
+}
+
+function nonSseStreamError(rawBody: string): Error {
+  try {
+    const payload = unwrapClineResponsePayload(JSON.parse(rawBody));
+    const objectType = stringValue(payload.object);
+    return new Error(objectType
+      ? `Cline API returned non-stream ${objectType} JSON while streaming was expected.`
+      : "Cline API returned non-SSE JSON while streaming was expected.");
+  } catch (error) {
+    if (error instanceof SyntaxError) return new Error("Cline API returned a non-SSE streaming response.");
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+function clineEnvelopeErrorDetail(payload: JsonRecord): string {
+  const code = stringValue(payload.code) || stringValue(payload.errorCode) || stringValue(payload.error);
+  if (code && /^[A-Za-z0-9_.-]{1,64}$/.test(code)) return code;
+  const message = stringValue(payload.message);
+  return message ? sanitizeErrorDetail(message) : "unknown_error";
 }
 
 async function updateStoredClinePassAuth(

@@ -30,6 +30,7 @@ export interface ClinePassModel {
     wireId: string;
     name: string;
     reasoning: boolean;
+    thinkingLevelMap?: Partial<Record<ReasoningLevel, string | null>>;
     input: string[];
     cost: Cost;
     contextWindow: number;
