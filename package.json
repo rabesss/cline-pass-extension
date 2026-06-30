@@ -1,6 +1,6 @@
 {
   "name": "@rabesss/cline-pass-extension",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Dependency-free Pi and OMP provider extension for Cline Pass.",
   "type": "module",
   "license": "MIT",
@@ -30,8 +30,12 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "npm run build && node --test",
-    "test": "node --test"
+    "lint:ts": "tsc -p tsconfig.json --noEmit",
+    "lint:js": "for file in dist/*.js test/*.js; do node --check \"$file\"; done",
+    "lint": "npm run lint:ts && npm run lint:js",
+    "test": "node --test",
+    "check": "npm run lint && npm run build && npm test",
+    "check:dist": "npm run build && git diff --exit-code -- dist && test -z \"$(git ls-files --others --exclude-standard -- dist)\""
   },
   "devDependencies": {
     "@types/node": "^18.19.0",

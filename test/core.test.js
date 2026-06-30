@@ -413,6 +413,19 @@ test("parseCommandArgs handles verify flags", () => {
   });
 });
 
+test("parseCommandArgs preserves unquoted backslashes", () => {
+  assert.deepEqual(parseCommandArgs(String.raw`verify --base-url C:\Users\ravish\api`), {
+    command: "verify",
+    options: {
+      baseUrl: String.raw`C:\Users\ravish\api`,
+    },
+  });
+});
+
+test("parseCommandArgs rejects unknown flags", () => {
+  assert.throws(() => parseCommandArgs("verify --provider-path /tmp/providers.json"), /Unknown option: --provider-path/);
+});
+
 test("verifyClinePass posts directly to Cline chat completions", async () => {
   let request;
   const report = await verifyClinePass(
@@ -431,6 +444,22 @@ test("verifyClinePass posts directly to Cline chat completions", async () => {
   assert.equal(request.url, "https://api.cline.bot/api/v1/chat/completions");
   assert.equal(request.init.headers.Authorization, "Bearer token-1");
   assert.equal(JSON.parse(request.init.body).model, "cline-pass/glm-5.2");
+});
+
+test("verifyClinePass returns structured network failures", async () => {
+  const report = await verifyClinePass(
+    {
+      fetchImpl: async () => {
+        throw new Error("network unavailable");
+      },
+    },
+    { CLINE_PASS_API_KEY: "token-1" },
+  );
+
+  assert.equal(report.ok, false);
+  assert.equal(report.command, "verify");
+  assert.equal(report.status, 0);
+  assert.match(report.detail, /network unavailable/);
 });
 
 test("verifyClinePass unwraps Cline success envelopes", async () => {
@@ -571,6 +600,70 @@ test("createStreamClinePass maps clean selector ids and streams text deltas", as
   assert.equal(events.at(-1).type, "done");
 });
 
+test("createStreamClinePass only applies terminal streamed usage", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([
+      { choices: [{ delta: { content: "hel" } }], usage: { prompt_tokens: 99, completion_tokens: 99, total_tokens: 198 } },
+      {
+        choices: [{ delta: { content: "lo" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+      },
+    ]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  const usage = events.at(-1).message.usage;
+  assert.equal(usage.input, 2);
+  assert.equal(usage.output, 3);
+  assert.equal(usage.totalTokens, 5);
+  assert.equal(usage.cost.input, 0.00002);
+  assert.ok(Math.abs(usage.cost.output - 0.00006) < Number.EPSILON);
+});
+
+test("createStreamClinePass keeps zero usage when upstream omits usage", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.deepEqual(events.at(-1).message.usage, {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+});
+
+test("createStreamClinePass preserves non-stop finish reasons", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "blocked" }, finish_reason: "content_filter" }] }]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.equal(events.at(-1).reason, "contentFilter");
+  assert.equal(events.at(-1).message.stopReason, "contentFilter");
+});
+
 test("createStreamClinePass forwards OMP reasoning effort", async () => {
   let payload;
   const stream = createStreamClinePass({
@@ -700,6 +793,24 @@ test("createStreamClinePass unwraps Cline success envelopes in JSON fallback", a
   assert.equal(events.at(-1).type, "done");
 });
 
+test("createStreamClinePass routes non-SSE JSON bodies through fallback", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => rawBodyResponse(JSON.stringify({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+    })),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.deepEqual(events.filter(event => event.type === "text_delta").map(event => event.delta), ["ok"]);
+  assert.equal(events.at(-1).type, "done");
+});
+
 test("createStreamClinePass reports non-SSE Cline error envelopes safely", async () => {
   const stream = createStreamClinePass({
     fetchImpl: async () => rawBodyResponse(JSON.stringify({
@@ -719,6 +830,112 @@ test("createStreamClinePass reports non-SSE Cline error envelopes safely", async
   const error = events.find(event => event.type === "error");
   assert.match(error.error.errorMessage, /invalid_auth/);
   assert.doesNotMatch(error.error.errorMessage, /token-123456789012345678901234/);
+});
+
+test("createStreamClinePass includes safe non-SSE server details", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => rawBodyResponse(
+      JSON.stringify({ message: "token expired token-123456789012345678901234" }),
+      { headers: { "content-type": "text/event-stream" } },
+    ),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /token expired/);
+  assert.doesNotMatch(error.error.errorMessage, /token-123456789012345678901234/);
+});
+
+test("createStreamClinePass suppresses tool calls for truncated output", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([
+      {
+        choices: [{
+          delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "lookup", arguments: "{\"q\":\"a\"}" } }] },
+          finish_reason: "length",
+        }],
+      },
+    ]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.equal(events.some(event => event.type === "toolcall_start"), false);
+  assert.equal(events.at(-1).reason, "length");
+  assert.deepEqual(events.at(-1).message.content, []);
+});
+
+test("createStreamClinePass rejects invalid tool call arguments", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([
+      {
+        choices: [{
+          delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "lookup", arguments: "{" } }] },
+          finish_reason: "tool_calls",
+        }],
+      },
+    ]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /invalid tool call arguments/);
+});
+
+test("createStreamClinePass rejects tool calls without names", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([
+      {
+        choices: [{
+          delta: { tool_calls: [{ index: 0, id: "call_1", function: { arguments: "{}" } }] },
+          finish_reason: "tool_calls",
+        }],
+      },
+    ]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /without a function name/);
+});
+
+test("createStreamClinePass rejects empty event-stream bodies", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => rawBodyResponse("", { headers: { "content-type": "text/event-stream" } }),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  const error = events.find(event => event.type === "error");
+  assert.match(error.error.errorMessage, /non-SSE streaming response/);
 });
 
 test("createStreamClinePass falls back to saved OMP OAuth credentials when apiKey is a placeholder", async () => {
@@ -908,7 +1125,23 @@ test("extension command completions and JSON errors are scoped", async () => {
   });
 
   assert.equal(notice.level, "error");
-  assert.equal(JSON.parse(notice.message).ok, false);
+  assert.deepEqual(JSON.parse(notice.message), {
+    ok: false,
+    command: "missing",
+    detail: "Unknown clinepass command: missing",
+    json: true,
+  });
+
+  await commands.clinepass.handler("missing --json=false", {
+    ui: {
+      notify(message, level) {
+        notice = { message, level };
+      },
+    },
+  });
+
+  assert.equal(notice.level, "error");
+  assert.match(notice.message, /^FAIL clinepass: Unknown clinepass command: missing/);
 });
 
 test("runClinePassCommand preserves json output preference", async () => {
@@ -979,6 +1212,7 @@ function rawBodyResponse(body, init = {}) {
   return {
     ok: init.status ? init.status >= 200 && init.status < 300 : true,
     status: init.status || 200,
+    headers: responseHeaders(init.headers || { "content-type": "application/json" }),
     body: new ReadableStream({
       start(controller) {
         controller.enqueue(encoder.encode(body));
@@ -996,6 +1230,7 @@ function sseResponse(chunks, init = {}) {
   return {
     ok: init.status ? init.status >= 200 && init.status < 300 : true,
     status: init.status || 200,
+    headers: responseHeaders(init.headers || { "content-type": "text/event-stream" }),
     body: new ReadableStream({
       start(controller) {
         for (const chunk of chunks) {
@@ -1007,6 +1242,14 @@ function sseResponse(chunks, init = {}) {
     }),
     async json() {
       throw new Error("streaming response");
+    },
+  };
+}
+
+function responseHeaders(headers) {
+  return {
+    forEach(callback) {
+      for (const [key, value] of Object.entries(headers)) callback(String(value), key);
     },
   };
 }

@@ -3,6 +3,7 @@ import {
   CLINE_PASS_MODELS,
   commandUsage,
   formatCommandResult,
+  parseCommandArgs,
   runClinePassCommand,
 } from "./core.js";
 
@@ -38,15 +39,19 @@ export default function clinePassExtension(pi: ExtensionHost): void {
     description: "Inspect and verify the direct Cline Pass provider",
     getArgumentCompletions: argumentCompletions,
     handler: async (args, ctx) => {
-      const wantsJson = /\s--json(?:[=\s]|$)/.test(` ${args}`);
+      let command = "clinepass";
+      let wantsJson = false;
       try {
+        const parsed = parseCommandArgs(args);
+        command = parsed.command;
+        wantsJson = Boolean(parsed.options.json);
         const result = await runClinePassCommand(args);
         emit(ctx, formatCommandResult(result, result?.json), result.ok ? "info" : "error");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         emit(
           ctx,
-          wantsJson ? JSON.stringify({ ok: false, command: "clinepass", message }, null, 2) : `FAIL clinepass: ${message}\n\n${commandUsage()}`,
+          wantsJson ? JSON.stringify({ ok: false, command, detail: message, json: true }, null, 2) : `FAIL clinepass: ${message}\n\n${commandUsage()}`,
           "error",
         );
       }

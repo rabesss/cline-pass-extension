@@ -1,0 +1,17 @@
+export const PROVIDER_ID = "cline-pass";
+export const CLINE_ACCOUNT_PROVIDER_ID = "cline";
+export const PROVIDER_NAME = "Cline Pass";
+export const CLINE_API_BASE = "https://api.cline.bot/api/v1";
+export const CLINE_WORKOS_API_BASE = "https://api.workos.com";
+export const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
+export const CLINE_WORKOS_ACCESS_TOKEN_PREFIX = "workos:";
+export const CLINE_PASS_API_KEY_ENV_VAR = "CLINE_PASS_API_KEY";
+export const CLINE_API_KEY_ENV_VAR = "CLINE_API_KEY";
+export const CLINE_PASS_ACCESS_TOKEN_ENV_VAR = "CLINE_PASS_ACCESS_TOKEN";
+export const CLINE_PASS_OMP_AGENT_DB_ENV_VAR = "CLINE_PASS_OMP_AGENT_DB";
+export const DEFAULT_MODEL = "glm-5.2";
+export const DEFAULT_WIRE_MODEL = "cline-pass/glm-5.2";
+export const DEFAULT_SOURCE_PATH = "~/.cline/data/settings/providers.json";
+export const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+export const REASONING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+//# sourceMappingURL=constants.js.map
