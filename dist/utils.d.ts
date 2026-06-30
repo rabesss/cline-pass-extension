@@ -1,11 +1,5 @@
-import type { ClineDeviceAuthorization, Env } from "./types.js";
+import type { Env } from "./types.js";
 export declare function expandHome(input: string, env?: Env): string;
-export declare function verificationUriWithCode(device: ClineDeviceAuthorization): string;
-export declare function positiveInteger(value: unknown, fallback: number): number;
-export declare function optionalNonNegativeInteger(value: unknown): number | undefined;
-export declare function withAbortSignal(init: RequestInit, signal?: AbortSignal): RequestInit;
-export declare function throwIfAborted(signal?: AbortSignal): void;
-export declare function delay(ms: number, signal?: AbortSignal): Promise<void>;
 export declare function sanitizeErrorDetail(input: string): string;
 export declare function normalizeBaseUrl(value: string): string;
 export declare function describeExpiry(value: unknown): {

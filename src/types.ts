@@ -93,37 +93,6 @@ export interface RefreshCredentialsOptions {
   fetchImpl?: FetchLike;
 }
 
-export interface RefreshAuthOptions {
-  baseUrl?: string;
-  fetchImpl?: FetchLike;
-}
-
-export interface RefreshAuthResult {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt?: unknown;
-  accountId?: string;
-}
-
-export interface ParseClineAuthPayloadOptions {
-  requireRefreshToken?: boolean;
-}
-
-export interface ClineDeviceAuthorization {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete?: string;
-  expiresInSeconds: number;
-  pollIntervalSeconds: number;
-}
-
-export interface WorkosTokenResult {
-  accessToken: string;
-  refreshToken: string;
-  tokenType?: string;
-}
-
 export interface ClineProviderAuth {
   accessToken?: string;
   refreshToken?: string;

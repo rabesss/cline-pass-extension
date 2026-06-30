@@ -9,54 +9,6 @@ export function expandHome(input, env = process.env) {
         return path.join(env.HOME || os.homedir(), input.slice(2));
     return input;
 }
-export function verificationUriWithCode(device) {
-    if (device.verificationUriComplete)
-        return device.verificationUriComplete;
-    try {
-        const url = new URL(device.verificationUri);
-        url.searchParams.set("user_code", device.userCode);
-        return url.toString();
-    }
-    catch {
-        return device.verificationUri;
-    }
-}
-export function positiveInteger(value, fallback) {
-    const numeric = Number(value);
-    return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : fallback;
-}
-export function optionalNonNegativeInteger(value) {
-    if (value === undefined || value === null || value === "")
-        return undefined;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : undefined;
-}
-export function withAbortSignal(init, signal) {
-    return signal ? { ...init, signal } : init;
-}
-export function throwIfAborted(signal) {
-    if (!signal?.aborted)
-        return;
-    if (signal.reason instanceof Error)
-        throw signal.reason;
-    throw new Error("Cline login was cancelled.");
-}
-export async function delay(ms, signal) {
-    throwIfAborted(signal);
-    if (ms <= 0)
-        return;
-    await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            signal?.removeEventListener("abort", abort);
-            resolve();
-        }, ms);
-        const abort = () => {
-            clearTimeout(timer);
-            reject(signal?.reason instanceof Error ? signal.reason : new Error("Cline login was cancelled."));
-        };
-        signal?.addEventListener("abort", abort, { once: true });
-    });
-}
 export function sanitizeErrorDetail(input) {
     return String(input).replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]");
 }

@@ -1,61 +1,13 @@
 import os from "node:os";
 import path from "node:path";
 
-import type { ClineDeviceAuthorization, Env } from "./types.js";
+import type { Env } from "./types.js";
 
 export function expandHome(input: string, env: Env = process.env): string {
   if (!input) return input;
   if (input === "~") return env.HOME || os.homedir();
   if (input.startsWith("~/")) return path.join(env.HOME || os.homedir(), input.slice(2));
   return input;
-}
-
-export function verificationUriWithCode(device: ClineDeviceAuthorization): string {
-  if (device.verificationUriComplete) return device.verificationUriComplete;
-  try {
-    const url = new URL(device.verificationUri);
-    url.searchParams.set("user_code", device.userCode);
-    return url.toString();
-  } catch {
-    return device.verificationUri;
-  }
-}
-
-export function positiveInteger(value: unknown, fallback: number): number {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : fallback;
-}
-
-export function optionalNonNegativeInteger(value: unknown): number | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : undefined;
-}
-
-export function withAbortSignal(init: RequestInit, signal?: AbortSignal): RequestInit {
-  return signal ? { ...init, signal } : init;
-}
-
-export function throwIfAborted(signal?: AbortSignal): void {
-  if (!signal?.aborted) return;
-  if (signal.reason instanceof Error) throw signal.reason;
-  throw new Error("Cline login was cancelled.");
-}
-
-export async function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfAborted(signal);
-  if (ms <= 0) return;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason instanceof Error ? signal.reason : new Error("Cline login was cancelled."));
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-  });
 }
 
 export function sanitizeErrorDetail(input: string): string {

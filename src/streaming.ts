@@ -162,8 +162,9 @@ async function consumeOpenAIStream(
 
     let chunk: JsonRecord;
     try {
-      chunk = JSON.parse(payload) as JsonRecord;
-    } catch {
+      chunk = parseOpenAIStreamPayload(payload);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error instanceof Error ? error : new Error(String(error));
       throw new Error("Cline API returned an invalid streaming JSON chunk.");
     }
 
@@ -221,6 +222,12 @@ async function consumeOpenAIStream(
   const shouldEmitToolCalls = allowsToolCalls(finishReason);
   if (shouldEmitToolCalls) emitPendingToolCalls(toolCalls, output, stream);
   return { finishReason, toolUse: shouldEmitToolCalls && toolCalls.size > 0 };
+}
+
+function parseOpenAIStreamPayload(payload: string): JsonRecord {
+  const chunk = JSON.parse(payload) as JsonRecord;
+  if (typeof chunk.success !== "boolean") return chunk;
+  return unwrapClineResponsePayload(chunk);
 }
 
 async function consumeOpenAINonStreamingFallback(

@@ -51,11 +51,10 @@ export async function doctorClinePass(env: Env = process.env): Promise<DoctorRes
 
   const expiry = describeExpiry(provider?.auth?.expiresAt);
   if (expiry) {
-    const hasRefreshToken = Boolean(stringValue(provider?.auth?.refreshToken));
     checks.push({
       name: "expiry",
-      ok: !expiry.expired || hasRefreshToken,
-      detail: expiry.expired && hasRefreshToken ? "expired; refresh available" : expiry.detail,
+      ok: !expiry.expired,
+      detail: expiry.detail,
     });
   }
 
@@ -127,7 +126,7 @@ export async function verifyClinePass(options: VerifyOptions = {}, env: Env = pr
       command: "verify",
       status: response.status,
       detail: response.status === 401
-        ? "Cline API returned HTTP 401. Run /login to sign in with Cline or provide a Cline API key."
+        ? "Cline API returned HTTP 401. Run /login and paste a Cline API key, refresh the Cline app session, or set CLINE_PASS_API_KEY."
         : `Cline API returned HTTP ${response.status}`,
       model,
       baseUrl,

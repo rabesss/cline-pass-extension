@@ -11,15 +11,12 @@ export { buildProviderConfig } from "./provider.js";
 export {
   findClinePassProvider,
   getClinePassApiKey,
-  loginClineAccount,
   loginClinePass,
   readClinePassAccessToken,
   readClinePassCredentials,
   readProviderSettings,
-  refreshClinePassAuth,
   refreshClinePassCredentials,
   resolveProvidersPath,
-  writeProviderSettings,
 } from "./auth.js";
 export {
   commandUsage,

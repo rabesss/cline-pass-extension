@@ -2,7 +2,7 @@ import type { JsonRecord } from "./types.js";
 import { sanitizeErrorDetail, stringValue } from "./utils.js";
 
 export function clineHTTPErrorMessage(status: number, body?: JsonRecord): string {
-  if (status === 401) return "Cline API returned HTTP 401. Run /login to sign in with Cline or provide a Cline API key.";
+  if (status === 401) return "Cline API returned HTTP 401. Run /login and paste a Cline API key, refresh the Cline app session, or set CLINE_PASS_API_KEY.";
   const detail = stringValue(body?.error) || stringValue(body?.message);
   return detail ? `Cline API returned HTTP ${status}: ${sanitizeErrorDetail(detail)}` : `Cline API returned HTTP ${status}`;
 }
