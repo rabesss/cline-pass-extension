@@ -74,7 +74,36 @@ test("readClinePassAccessToken reads the existing Cline login without printing m
 
   const token = await readClinePassAccessToken({ env: { CLINE_PROVIDERS_JSON: source } });
 
-  assert.equal(token, "token-1");
+  assert.equal(token, "workos:token-1");
+});
+
+test("readClinePassAccessToken also accepts Cline account provider auth", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
+  const source = path.join(tempDir, "providers.json");
+  await fs.writeFile(source, JSON.stringify(providerSettingsFor("cline", "token-1")), "utf8");
+
+  const token = await readClinePassAccessToken({ env: { CLINE_PROVIDERS_JSON: source } });
+
+  assert.equal(token, "workos:token-1");
+});
+
+test("readClinePassAccessToken prefers Cline account auth over legacy Cline Pass auth", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
+  const source = path.join(tempDir, "providers.json");
+  await fs.writeFile(
+    source,
+    JSON.stringify({
+      providers: {
+        ...providerSettingsFor("cline-pass", "legacy-token").providers,
+        ...providerSettingsFor("cline", "account-token").providers,
+      },
+    }),
+    "utf8",
+  );
+
+  const token = await readClinePassAccessToken({ env: { CLINE_PROVIDERS_JSON: source } });
+
+  assert.equal(token, "workos:account-token");
 });
 
 test("readClinePassAccessToken prefers Cline API key env vars", async () => {
@@ -111,12 +140,12 @@ test("readClinePassAccessToken refreshes and persists expired Cline tokens", asy
     },
   });
 
-  assert.equal(token, "new-token");
+  assert.equal(token, "workos:new-token");
   const stat = await fs.stat(source);
   assert.equal(stat.mode & 0o077, 0);
   const persisted = JSON.parse(await fs.readFile(source, "utf8"));
   const provider = findClinePassProvider(persisted);
-  assert.equal(provider.auth.accessToken, "new-token");
+  assert.equal(provider.auth.accessToken, "workos:new-token");
   assert.equal(provider.auth.refreshToken, "new-refresh-token");
   assert.equal(provider.auth.accountId, "acct_new");
 });
@@ -136,8 +165,137 @@ test("refreshClinePassAuth reports refresh failures without token details", asyn
   );
 });
 
-test("OMP OAuth adapter prompts for a Cline API key", async () => {
-  const credentials = await withProcessEnv({ CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_IMPORT_LOCAL: "" }, () =>
+test("OMP OAuth adapter signs in with the Cline account device flow", async () => {
+  const opened = [];
+  const progress = [];
+  const requests = [];
+
+  const credentials = await withProcessEnv({
+    CLINE_PASS_API_KEY: "",
+    CLINE_API_KEY: "",
+    CLINE_PASS_IMPORT_LOCAL: "",
+    CLINE_PASS_API_BASE: "https://cline.test/api/v1",
+    CLINE_PASS_WORKOS_API_BASE: "https://workos.test",
+    CLINE_PASS_WORKOS_CLIENT_ID: "client_test",
+  }, () =>
+    loginClinePass({
+      onAuth: async info => {
+        opened.push(info);
+      },
+      onProgress: async message => {
+        progress.push(message);
+      },
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        if (url === "https://workos.test/user_management/authorize/device") {
+          assert.equal(String(init.body), "client_id=client_test");
+          return jsonResponse({
+            device_code: "device-code-1",
+            user_code: "ABCD-EFGH",
+            verification_uri: "https://authkit.cline.test/device",
+            verification_uri_complete: "https://authkit.cline.test/device?user_code=ABCD-EFGH",
+            expires_in: 300,
+            interval: 1,
+          });
+        }
+        if (url === "https://workos.test/user_management/authenticate") {
+          const body = new URLSearchParams(String(init.body));
+          assert.equal(body.get("grant_type"), "urn:ietf:params:oauth:grant-type:device_code");
+          assert.equal(body.get("device_code"), "device-code-1");
+          assert.equal(body.get("client_id"), "client_test");
+          return jsonResponse({
+            access_token: "workos-access",
+            refresh_token: "workos-refresh",
+            token_type: "Bearer",
+          });
+        }
+        if (url === "https://cline.test/api/v1/auth/register") {
+          assert.deepEqual(JSON.parse(init.body), {
+            accessToken: "workos-access",
+            refreshToken: "workos-refresh",
+          });
+          return jsonResponse({
+            success: true,
+            data: {
+              accessToken: "cline-access",
+              refreshToken: "cline-refresh",
+              expiresAt: Date.now() + 3_600_000,
+              userInfo: { clineUserId: "acct_login" },
+            },
+          });
+        }
+        throw new Error(`unexpected url ${url}`);
+      },
+    }),
+  );
+
+  assert.equal(credentials.access, "workos:cline-access");
+  assert.equal(credentials.refresh, "cline-refresh");
+  assert.equal(getClinePassApiKey(credentials), "workos:cline-access");
+  assert.equal(opened[0].url, "https://authkit.cline.test/device?user_code=ABCD-EFGH");
+  assert.match(opened[0].instructions, /ABCD-EFGH/);
+  assert.equal(progress.some(message => message.includes("Waiting")), true);
+  assert.deepEqual(requests.map(request => request.url), [
+    "https://workos.test/user_management/authorize/device",
+    "https://workos.test/user_management/authenticate",
+    "https://cline.test/api/v1/auth/register",
+  ]);
+});
+
+test("OMP OAuth adapter rejects Cline account login without a refresh token", async () => {
+  await assert.rejects(
+    () =>
+      withProcessEnv({
+        CLINE_PASS_API_KEY: "",
+        CLINE_API_KEY: "",
+        CLINE_PASS_IMPORT_LOCAL: "",
+        CLINE_PASS_API_BASE: "https://cline.test/api/v1",
+        CLINE_PASS_WORKOS_API_BASE: "https://workos.test",
+        CLINE_PASS_WORKOS_CLIENT_ID: "client_test",
+      }, () =>
+        loginClinePass({
+          onAuth: async () => {},
+          fetch: async url => {
+            if (url === "https://workos.test/user_management/authorize/device") {
+              return jsonResponse({
+                device_code: "device-code-1",
+                user_code: "ABCD-EFGH",
+                verification_uri: "https://authkit.cline.test/device",
+                expires_in: 300,
+                interval: 1,
+              });
+            }
+            if (url === "https://workos.test/user_management/authenticate") {
+              return jsonResponse({
+                access_token: "workos-access",
+                refresh_token: "workos-refresh",
+              });
+            }
+            if (url === "https://cline.test/api/v1/auth/register") {
+              return jsonResponse({
+                success: true,
+                data: {
+                  accessToken: "cline-access",
+                  expiresAt: Date.now() + 3_600_000,
+                  userInfo: { clineUserId: "acct_login" },
+                },
+              });
+            }
+            throw new Error(`unexpected url ${url}`);
+          },
+        }),
+      ),
+    /did not include a refresh token/,
+  );
+});
+
+test("OMP OAuth adapter can still prompt for a Cline API key", async () => {
+  const credentials = await withProcessEnv({
+    CLINE_PASS_API_KEY: "",
+    CLINE_API_KEY: "",
+    CLINE_PASS_IMPORT_LOCAL: "",
+    CLINE_PASS_LOGIN_MODE: "api-key",
+  }, () =>
     loginClinePass({
       onAuth: async info => {
         assert.match(info.url, /api-keys/);
@@ -158,9 +316,9 @@ test("OMP OAuth adapter can import and refresh local Cline credentials when opte
 
   const credentials = await withProcessEnv({ CLINE_PROVIDERS_JSON: source, CLINE_PASS_IMPORT_LOCAL: "1" }, () => loginClinePass());
 
-  assert.equal(credentials.access, "token-1");
+  assert.equal(credentials.access, "workos:token-1");
   assert.equal(credentials.refresh, "refresh-token");
-  assert.equal(getClinePassApiKey(credentials), "token-1");
+  assert.equal(getClinePassApiKey(credentials), "workos:token-1");
 
   const refreshed = await withProcessEnv({ CLINE_PASS_API_BASE: "https://cline.test/api/v1" }, () =>
     refreshClinePassCredentials({ access: "old-token", refresh: "refresh-token", expires: Date.now() - 60_000 }, {
@@ -179,7 +337,7 @@ test("OMP OAuth adapter can import and refresh local Cline credentials when opte
     }),
   );
 
-  assert.equal(refreshed.access, "new-token");
+  assert.equal(refreshed.access, "workos:new-token");
   assert.equal(refreshed.refresh, "new-refresh-token");
 });
 
@@ -272,13 +430,13 @@ test("verifyClinePass requires explicit local Cline token import", async () => {
 
   assert.equal(called, false);
   assert.equal(missing.ok, false);
-  assert.match(missing.detail, /No Cline API key/);
+  assert.match(missing.detail, /No Cline Pass credential/);
 
   const imported = await verifyClinePass(
     {
       fetchImpl: async (url, init) => {
         called = true;
-        assert.equal(init.headers.Authorization, "Bearer token-1");
+        assert.equal(init.headers.Authorization, "Bearer workos:token-1");
         return jsonResponse({ choices: [{ message: { content: "CLINE_PASS_EXTENSION_OK" } }] });
       },
     },
@@ -339,7 +497,7 @@ test("createStreamClinePass uses injected fetch and base URL for explicit local 
         }
 
         assert.equal(url, "https://cline.test/api/v1/chat/completions");
-        assert.equal(init.headers.Authorization, "Bearer new-token");
+        assert.equal(init.headers.Authorization, "Bearer workos:new-token");
         return sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]);
       },
     })(
@@ -377,7 +535,7 @@ test("createStreamClinePass does not use local Cline tokens unless explicitly op
 
   assert.equal(called, false);
   const error = events.find(event => event.type === "error");
-  assert.match(error.error.errorMessage, /No Cline API key/);
+  assert.match(error.error.errorMessage, /No Cline Pass credential/);
 });
 
 test("createStreamClinePass rejects tool results without a matching assistant tool call", async () => {
@@ -442,12 +600,16 @@ test("runClinePassCommand preserves json output preference", async () => {
 });
 
 function providerSettings(accessToken, expiresAt = Date.now() + 3_600_000) {
+  return providerSettingsFor("cline-pass", accessToken, expiresAt);
+}
+
+function providerSettingsFor(providerId, accessToken, expiresAt = Date.now() + 3_600_000) {
   return {
     providers: {
-      "cline-pass": {
+      [providerId]: {
         settings: {
-          provider: "cline-pass",
-          model: "cline-pass/glm-5.2",
+          provider: providerId,
+          model: providerId === "cline-pass" ? "cline-pass/glm-5.2" : "cline/glm-5.2",
           auth: {
             accessToken,
             refreshToken: "refresh-token",

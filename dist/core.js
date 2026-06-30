@@ -2,8 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 export const PROVIDER_ID = "cline-pass";
+export const CLINE_ACCOUNT_PROVIDER_ID = "cline";
 export const PROVIDER_NAME = "Cline Pass";
 export const CLINE_API_BASE = "https://api.cline.bot/api/v1";
+export const CLINE_WORKOS_API_BASE = "https://api.workos.com";
+export const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
+export const CLINE_WORKOS_ACCESS_TOKEN_PREFIX = "workos:";
 export const CLINE_PASS_API_KEY_ENV_VAR = "CLINE_PASS_API_KEY";
 export const CLINE_API_KEY_ENV_VAR = "CLINE_API_KEY";
 export const CLINE_PASS_ACCESS_TOKEN_ENV_VAR = "CLINE_PASS_ACCESS_TOKEN";
@@ -79,11 +83,11 @@ export async function readClinePassCredentials(options = {}) {
         return credentialsFromAuth({ accessToken: envToken });
     const providersPath = options.path || resolveProvidersPath(env);
     const settings = await readProviderSettings(providersPath);
-    const provider = findClinePassProviderEntry(settings);
+    const provider = findClineAuthProviderEntry(settings);
     const token = stringValue(provider?.auth?.accessToken);
     if (!provider || !token)
-        throw new Error("Cline Pass access token not found. Sign in with Cline first.");
-    if (!isExpired(provider?.auth?.expiresAt, options.refreshSkewMs ?? 60_000)) {
+        throw new Error("Cline access token not found. Sign in with Cline first.");
+    if (!isClineAccountAuthExpired(provider.auth, token, options.refreshSkewMs ?? 60_000)) {
         return credentialsFromAuth(provider.auth, token);
     }
     const refreshToken = stringValue(provider?.auth?.refreshToken);
@@ -98,7 +102,7 @@ export async function readClinePassCredentials(options = {}) {
     }
     const refreshedAuth = {
         ...provider.auth,
-        accessToken: refreshed.accessToken,
+        accessToken: formatClineAccountAccessToken(refreshed.accessToken),
         refreshToken: refreshed.refreshToken || refreshToken,
         expiresAt: refreshed.expiresAt,
     };
@@ -127,17 +131,7 @@ export async function refreshClinePassAuth(refreshToken, options = {}) {
         const detail = safeRefreshErrorDetail(payload, response.status);
         throw new Error(`Cline Pass token refresh failed: ${detail}`);
     }
-    const data = payload?.data;
-    const accessToken = stringValue(data?.accessToken);
-    const nextRefreshToken = stringValue(data?.refreshToken);
-    if (!accessToken)
-        throw new Error("Cline Pass token refresh response did not include an access token.");
-    return {
-        accessToken,
-        refreshToken: nextRefreshToken,
-        expiresAt: data?.expiresAt,
-        accountId: stringValue(data?.userInfo?.accountId) || stringValue(data?.accountId),
-    };
+    return parseClineAuthPayload(payload, "Cline Pass token refresh response");
 }
 export async function loginClinePass(callbacks = {}) {
     const envApiKey = stringValue(process.env.CLINE_PASS_API_KEY) || stringValue(process.env.CLINE_API_KEY);
@@ -146,19 +140,153 @@ export async function loginClinePass(callbacks = {}) {
     if (process.env.CLINE_PASS_IMPORT_LOCAL === "1") {
         return readClinePassCredentials();
     }
-    if (typeof callbacks.onAuth === "function") {
-        await callbacks.onAuth({
-            url: "https://app.cline.bot/settings/api-keys",
-            instructions: "Create a Cline API key, then paste it into the prompt.",
-        });
+    if (process.env.CLINE_PASS_LOGIN_MODE !== "api-key" && typeof callbacks.onAuth === "function") {
+        try {
+            return await loginClineAccount(callbacks);
+        }
+        catch (error) {
+            if (typeof callbacks.onPrompt !== "function")
+                throw error;
+            await callbacks.onProgress?.(`Cline account login failed: ${sanitizeErrorDetail(safeError(error))}`);
+        }
     }
+    await callbacks.onAuth?.({
+        url: "https://app.cline.bot/settings/api-keys",
+        instructions: "Create a Cline API key, then paste it into the prompt.",
+    });
     if (typeof callbacks.onPrompt !== "function") {
-        throw new Error("Set CLINE_PASS_API_KEY, or run /login in OMP and paste a Cline API key.");
+        throw new Error("Run /login in OMP to sign in with Cline, or set CLINE_PASS_API_KEY.");
     }
-    const apiKey = sanitizeCredentialInput(await callbacks.onPrompt({ message: "Paste your Cline API key for Cline Pass:" }));
+    const apiKey = sanitizeCredentialInput(await callbacks.onPrompt({ message: "Paste a Cline API key for Cline Pass, or leave blank to cancel:" }));
     if (!apiKey)
         throw new Error("No Cline API key provided.");
     return credentialsFromApiKey(apiKey);
+}
+export async function loginClineAccount(callbacks = {}) {
+    if (typeof callbacks.onAuth !== "function") {
+        throw new Error("Cline account login requires an auth callback.");
+    }
+    const fetchImpl = callbacks.fetch || fetch;
+    if (typeof fetchImpl !== "function")
+        throw new Error("global fetch is not available; use Node 18+ or a runtime with fetch");
+    const apiBaseUrl = (process.env.CLINE_PASS_API_BASE || CLINE_API_BASE).replace(/\/+$/, "");
+    const workosApiBaseUrl = (process.env.CLINE_PASS_WORKOS_API_BASE || CLINE_WORKOS_API_BASE).replace(/\/+$/, "");
+    const clientId = stringValue(process.env.CLINE_PASS_WORKOS_CLIENT_ID) || CLINE_WORKOS_CLIENT_ID;
+    const device = await startClineDeviceAuthorization({ fetchImpl, workosApiBaseUrl, clientId, signal: callbacks.signal });
+    await callbacks.onAuth({
+        url: device.verificationUriComplete || verificationUriWithCode(device),
+        instructions: `Enter this code in your browser: ${device.userCode}`,
+    });
+    await callbacks.onProgress?.("Waiting for browser authentication confirmation...");
+    const workosToken = await pollClineDeviceAuthorization({
+        fetchImpl,
+        workosApiBaseUrl,
+        clientId,
+        device,
+        signal: callbacks.signal,
+        onProgress: callbacks.onProgress,
+    });
+    const registered = await registerClineAccountToken({
+        fetchImpl,
+        apiBaseUrl,
+        token: workosToken,
+        signal: callbacks.signal,
+    });
+    const auth = { accessToken: formatClineAccountAccessToken(registered.accessToken) };
+    if (registered.refreshToken)
+        auth.refreshToken = registered.refreshToken;
+    if (registered.expiresAt !== undefined)
+        auth.expiresAt = registered.expiresAt;
+    if (registered.accountId)
+        auth.accountId = registered.accountId;
+    return credentialsFromAuth(auth);
+}
+async function startClineDeviceAuthorization(options) {
+    throwIfAborted(options.signal);
+    const response = await options.fetchImpl(`${options.workosApiBaseUrl}/user_management/authorize/device`, withAbortSignal({
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: options.clientId }),
+    }, options.signal));
+    const payload = await response.json().catch(() => undefined);
+    if (!response.ok) {
+        throw new Error(`Cline device authorization failed: ${safeOAuthErrorDetail(payload, response.status)}`);
+    }
+    const deviceCode = stringValue(payload?.device_code);
+    const userCode = stringValue(payload?.user_code);
+    const verificationUri = stringValue(payload?.verification_uri);
+    if (!deviceCode || !userCode || !verificationUri) {
+        throw new Error("Cline device authorization response was missing required fields.");
+    }
+    const result = {
+        deviceCode,
+        userCode,
+        verificationUri,
+        expiresInSeconds: positiveInteger(payload?.expires_in, 300),
+        pollIntervalSeconds: positiveInteger(payload?.interval, 5),
+    };
+    const verificationUriComplete = stringValue(payload?.verification_uri_complete);
+    if (verificationUriComplete)
+        result.verificationUriComplete = verificationUriComplete;
+    return result;
+}
+async function pollClineDeviceAuthorization(options) {
+    const startedAt = Date.now();
+    const expiresAt = startedAt + options.device.expiresInSeconds * 1000;
+    let pollIntervalMs = Math.max(1, options.device.pollIntervalSeconds) * 1000;
+    const overridePollDelay = optionalNonNegativeInteger(process.env.CLINE_PASS_LOGIN_POLL_DELAY_MS);
+    if (overridePollDelay !== undefined)
+        pollIntervalMs = overridePollDelay;
+    while (Date.now() <= expiresAt) {
+        throwIfAborted(options.signal);
+        const response = await options.fetchImpl(`${options.workosApiBaseUrl}/user_management/authenticate`, withAbortSignal({
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+                grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+                device_code: options.device.deviceCode,
+                client_id: options.clientId,
+            }),
+        }, options.signal));
+        const payload = await response.json().catch(() => undefined);
+        if (response.ok) {
+            const accessToken = stringValue(payload?.access_token);
+            const refreshToken = stringValue(payload?.refresh_token);
+            if (!accessToken || !refreshToken)
+                throw new Error("Cline device token response was missing required fields.");
+            return {
+                accessToken,
+                refreshToken,
+                tokenType: stringValue(payload?.token_type),
+            };
+        }
+        const errorCode = stringValue(payload?.error);
+        if (errorCode === "authorization_pending" || errorCode === "slow_down") {
+            if (errorCode === "slow_down" && overridePollDelay === undefined)
+                pollIntervalMs += 1000;
+            await options.onProgress?.("Waiting for browser authentication confirmation...");
+            await delay(pollIntervalMs, options.signal);
+            continue;
+        }
+        throw new Error(`Cline device token polling failed: ${safeOAuthErrorDetail(payload, response.status)}`);
+    }
+    throw new Error("Cline device authorization timed out.");
+}
+async function registerClineAccountToken(options) {
+    throwIfAborted(options.signal);
+    const response = await options.fetchImpl(`${options.apiBaseUrl}/auth/register`, withAbortSignal({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            accessToken: options.token.accessToken,
+            refreshToken: options.token.refreshToken,
+        }),
+    }, options.signal));
+    const payload = await response.json().catch(() => undefined);
+    if (!response.ok || payload?.success === false) {
+        throw new Error(`Cline token registration failed: ${safeOAuthErrorDetail(payload, response.status)}`);
+    }
+    return parseClineAuthPayload(payload, "Cline token registration response", { requireRefreshToken: true });
 }
 export async function refreshClinePassCredentials(credentials, options = {}) {
     const access = stringValue(credentials?.access);
@@ -170,7 +298,7 @@ export async function refreshClinePassCredentials(credentials, options = {}) {
         fetchImpl: options.fetchImpl || fetch,
     });
     const refreshedAuth = {
-        accessToken: refreshed.accessToken,
+        accessToken: formatClineAccountAccessToken(refreshed.accessToken),
         expiresAt: refreshed.expiresAt,
     };
     const refreshToken = refreshed.refreshToken || credentials?.refresh;
@@ -215,21 +343,30 @@ export function findClinePassProvider(settings) {
     return result;
 }
 function findClinePassProviderEntry(settings) {
+    return findClineProviderEntry(settings, [PROVIDER_ID]);
+}
+function findClineAuthProviderEntry(settings) {
+    return findClineProviderEntry(settings, [CLINE_ACCOUNT_PROVIDER_ID, PROVIDER_ID]);
+}
+function findClineProviderEntry(settings, providerIds) {
     const providers = settings?.providers;
     if (!providers || typeof providers !== "object")
         return undefined;
-    for (const [key, value] of Object.entries(providers)) {
-        const entry = value && typeof value === "object" ? value : {};
-        const providerSettings = entry.settings && typeof entry.settings === "object" ? entry.settings : entry;
-        const providerId = stringValue(providerSettings.provider) || key;
-        if (providerId.trim().toLowerCase() !== PROVIDER_ID)
-            continue;
-        const auth = providerSettings.auth && typeof providerSettings.auth === "object"
-            ? providerSettings.auth
-            : entry.auth && typeof entry.auth === "object"
-                ? entry.auth
-                : undefined;
-        return { key, entry, settings: providerSettings, auth };
+    const normalizedProviderIds = providerIds.map(providerId => providerId.trim().toLowerCase());
+    for (const expectedProviderId of normalizedProviderIds) {
+        for (const [key, value] of Object.entries(providers)) {
+            const entry = value && typeof value === "object" ? value : {};
+            const providerSettings = entry.settings && typeof entry.settings === "object" ? entry.settings : entry;
+            const providerId = stringValue(providerSettings.provider) || key;
+            if (providerId.trim().toLowerCase() !== expectedProviderId)
+                continue;
+            const auth = providerSettings.auth && typeof providerSettings.auth === "object"
+                ? providerSettings.auth
+                : entry.auth && typeof entry.auth === "object"
+                    ? entry.auth
+                    : undefined;
+            return { key, entry, settings: providerSettings, auth };
+        }
     }
     return undefined;
 }
@@ -255,11 +392,11 @@ export async function doctorClinePass(env = process.env) {
         checks.push({ name: "providers.json", ok: false, detail: safeError(error) });
         return { ok: false, command: "doctor", providersPath, checks };
     }
-    const provider = findClinePassProviderEntry(settings);
+    const provider = findClineAuthProviderEntry(settings);
     checks.push({
         name: "provider",
         ok: Boolean(provider),
-        detail: provider ? "cline-pass provider found" : "cline-pass provider not found",
+        detail: provider ? `${provider.settings.provider || provider.key} provider found` : "cline/cline-pass provider not found",
     });
     checks.push({
         name: "access token",
@@ -316,7 +453,7 @@ export async function verifyClinePass(options = {}, env = process.env) {
             command: "verify",
             status: response.status,
             detail: response.status === 401
-                ? "Cline API returned HTTP 401. Create a Cline API key or re-authenticate Cline, then run /login."
+                ? "Cline API returned HTTP 401. Run /login to sign in with Cline or provide a Cline API key."
                 : `Cline API returned HTTP ${response.status}`,
             model,
             baseUrl,
@@ -676,7 +813,7 @@ async function resolveRuntimeApiKey(options = {}, env = process.env) {
         return envApiKey;
     const envAccessToken = stringValue(env.CLINE_PASS_ACCESS_TOKEN);
     if (envAccessToken)
-        return envAccessToken;
+        return formatClineAccountAccessToken(envAccessToken);
     if (env.CLINE_PASS_IMPORT_LOCAL !== "1")
         return "";
     const readOptions = {
@@ -690,7 +827,7 @@ async function resolveRuntimeApiKey(options = {}, env = process.env) {
     return readClinePassAccessToken(readOptions).catch(() => "");
 }
 function missingApiKeyMessage() {
-    return "No Cline API key. Run /login and paste a Cline API key, or set CLINE_PASS_API_KEY. Set CLINE_PASS_IMPORT_LOCAL=1 only if you want to try an existing local Cline account token.";
+    return "No Cline Pass credential. Run /login and sign in with Cline, or set CLINE_PASS_API_KEY. Set CLINE_PASS_IMPORT_LOCAL=1 only if you want to try an existing local Cline account token.";
 }
 function isEnvVarReference(value) {
     return [CLINE_PASS_API_KEY_ENV_VAR, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR].includes(value);
@@ -821,20 +958,20 @@ function finishReason(reason) {
 }
 function clineHTTPErrorMessage(status, body) {
     if (status === 401)
-        return "Cline API returned HTTP 401. Run /login with a Cline API key or re-authenticate Cline.";
+        return "Cline API returned HTTP 401. Run /login to sign in with Cline or provide a Cline API key.";
     const detail = stringValue(body?.error) || stringValue(body?.message);
     return detail ? `Cline API returned HTTP ${status}: ${sanitizeErrorDetail(detail)}` : `Cline API returned HTTP ${status}`;
 }
 async function updateStoredClinePassAuth(providersPath, expectedRefreshToken, refreshed) {
     const latest = await readProviderSettings(providersPath);
-    const provider = findClinePassProviderEntry(latest);
+    const provider = findClineAuthProviderEntry(latest);
     if (!provider)
         return;
     const currentRefreshToken = stringValue(provider.auth?.refreshToken);
     if (currentRefreshToken && currentRefreshToken !== expectedRefreshToken)
         return;
     const authTarget = provider.auth || {};
-    authTarget.accessToken = refreshed.accessToken;
+    authTarget.accessToken = formatClineAccountAccessToken(refreshed.accessToken);
     authTarget.refreshToken = refreshed.refreshToken || expectedRefreshToken;
     authTarget.expiresAt = refreshed.expiresAt;
     if (refreshed.accountId)
@@ -851,12 +988,13 @@ async function updateStoredClinePassAuth(providersPath, expectedRefreshToken, re
     await writeProviderSettings(providersPath, latest);
 }
 function credentialsFromAuth(auth, accessOverride) {
-    const access = stringValue(accessOverride) || stringValue(auth?.accessToken);
+    const rawAccess = stringValue(accessOverride) || stringValue(auth?.accessToken);
+    const access = formatClineAccountAccessToken(rawAccess);
     const refresh = stringValue(auth?.refreshToken) || access;
     return {
         access,
         refresh,
-        expires: expiryTimeMs(auth?.expiresAt) || Date.now() + 3_600_000,
+        expires: clineAccountExpiryTimeMs(auth, access) || Date.now() - 1,
     };
 }
 function credentialsFromApiKey(apiKey) {
@@ -866,10 +1004,40 @@ function credentialsFromApiKey(apiKey) {
         expires: Date.now() + TEN_YEARS_MS,
     };
 }
+function parseClineAuthPayload(payload, context, options = {}) {
+    const data = payload?.data;
+    const accessToken = stringValue(data?.accessToken);
+    if (!accessToken)
+        throw new Error(`${context} did not include an access token.`);
+    const refreshToken = stringValue(data?.refreshToken);
+    if (options.requireRefreshToken && !refreshToken)
+        throw new Error(`${context} did not include a refresh token.`);
+    const result = {
+        accessToken,
+        expiresAt: data?.expiresAt,
+    };
+    if (refreshToken)
+        result.refreshToken = refreshToken;
+    const accountId = stringValue(data?.userInfo?.clineUserId)
+        || stringValue(data?.userInfo?.accountId)
+        || stringValue(data?.accountId);
+    if (accountId)
+        result.accountId = accountId;
+    return result;
+}
 function safeRefreshErrorDetail(payload, status) {
     const code = stringValue(payload?.code) || stringValue(payload?.errorCode);
     if (/^[a-z0-9_.-]{1,64}$/i.test(code))
         return code;
+    return `HTTP ${status}`;
+}
+function safeOAuthErrorDetail(payload, status) {
+    const code = stringValue(payload?.error) || stringValue(payload?.code) || stringValue(payload?.errorCode);
+    if (/^[a-z0-9_.-]{1,64}$/i.test(code))
+        return code;
+    const message = stringValue(payload?.error_description) || stringValue(payload?.message);
+    if (message)
+        return sanitizeErrorDetail(message);
     return `HTTP ${status}`;
 }
 function sanitizeCredentialInput(input) {
@@ -881,6 +1049,86 @@ function sanitizeCredentialInput(input) {
         .join("")
         .trim();
     return cleaned.replace(/^['"`]+|['"`]+$/g, "").trim();
+}
+function formatClineAccountAccessToken(token) {
+    const value = stringValue(token);
+    if (!value)
+        return "";
+    return value.toLowerCase().startsWith(CLINE_WORKOS_ACCESS_TOKEN_PREFIX) ? value : `${CLINE_WORKOS_ACCESS_TOKEN_PREFIX}${value}`;
+}
+function stripClineAccountAccessTokenPrefix(token) {
+    const value = stringValue(token);
+    if (!value)
+        return "";
+    return value.toLowerCase().startsWith(CLINE_WORKOS_ACCESS_TOKEN_PREFIX)
+        ? value.slice(CLINE_WORKOS_ACCESS_TOKEN_PREFIX.length)
+        : value;
+}
+function isClineAccountAuthExpired(auth, accessToken, skewMs = 0) {
+    const expiry = clineAccountExpiryTimeMs(auth, accessToken);
+    return expiry === undefined || expiry <= Date.now() + skewMs;
+}
+function clineAccountExpiryTimeMs(auth, accessToken) {
+    return expiryTimeMs(auth?.expiresAt) ?? jwtExpiryTimeMs(stripClineAccountAccessTokenPrefix(accessToken));
+}
+function jwtExpiryTimeMs(token) {
+    const parts = token.split(".");
+    if (parts.length !== 3 || !parts[1])
+        return undefined;
+    try {
+        const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+        const exp = Number(payload.exp);
+        return Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+function verificationUriWithCode(device) {
+    try {
+        const url = new URL(device.verificationUri);
+        url.searchParams.set("user_code", device.userCode);
+        return url.toString();
+    }
+    catch {
+        return device.verificationUri;
+    }
+}
+function positiveInteger(value, fallback) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : fallback;
+}
+function optionalNonNegativeInteger(value) {
+    if (value === undefined || value === null || value === "")
+        return undefined;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : undefined;
+}
+function withAbortSignal(init, signal) {
+    return signal ? { ...init, signal } : init;
+}
+function throwIfAborted(signal) {
+    if (!signal?.aborted)
+        return;
+    if (signal.reason instanceof Error)
+        throw signal.reason;
+    throw new Error("Cline login was cancelled.");
+}
+async function delay(ms, signal) {
+    throwIfAborted(signal);
+    if (ms <= 0)
+        return;
+    await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", abort);
+            resolve();
+        }, ms);
+        const abort = () => {
+            clearTimeout(timer);
+            reject(signal?.reason instanceof Error ? signal.reason : new Error("Cline login was cancelled."));
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+    });
 }
 function sanitizeErrorDetail(input) {
     return String(input).replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]");

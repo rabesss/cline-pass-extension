@@ -1,6 +1,10 @@
 export declare const PROVIDER_ID = "cline-pass";
+export declare const CLINE_ACCOUNT_PROVIDER_ID = "cline";
 export declare const PROVIDER_NAME = "Cline Pass";
 export declare const CLINE_API_BASE = "https://api.cline.bot/api/v1";
+export declare const CLINE_WORKOS_API_BASE = "https://api.workos.com";
+export declare const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
+export declare const CLINE_WORKOS_ACCESS_TOKEN_PREFIX = "workos:";
 export declare const CLINE_PASS_API_KEY_ENV_VAR = "CLINE_PASS_API_KEY";
 export declare const CLINE_API_KEY_ENV_VAR = "CLINE_API_KEY";
 export declare const CLINE_PASS_ACCESS_TOKEN_ENV_VAR = "CLINE_PASS_ACCESS_TOKEN";
@@ -76,6 +80,9 @@ interface LoginCallbacks {
     onPrompt?: (prompt: {
         message: string;
     }) => string | Promise<string>;
+    onProgress?: (message: string) => void | Promise<void>;
+    fetch?: FetchLike;
+    signal?: AbortSignal;
 }
 interface ReadCredentialsOptions {
     env?: Env;
@@ -218,6 +225,7 @@ export declare function readClinePassAccessToken(options?: ReadCredentialsOption
 export declare function readClinePassCredentials(options?: ReadCredentialsOptions): Promise<Credentials>;
 export declare function refreshClinePassAuth(refreshToken: string | undefined, options?: RefreshAuthOptions): Promise<RefreshAuthResult>;
 export declare function loginClinePass(callbacks?: LoginCallbacks): Promise<Credentials>;
+export declare function loginClineAccount(callbacks?: LoginCallbacks): Promise<Credentials>;
 export declare function refreshClinePassCredentials(credentials: Partial<Credentials> | undefined, options?: RefreshCredentialsOptions): Promise<Credentials>;
 export declare function getClinePassApiKey(credentials?: Partial<Credentials>): string;
 export declare function readProviderSettings(providersPath: string): Promise<ClineSettings>;

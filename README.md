@@ -4,31 +4,34 @@ Dependency-free Pi and OMP provider extension for Cline Pass.
 
 This package talks directly to Cline's OpenAI-compatible API. It does not use CLIProxyAPI.
 
-For reliable auth, create a Cline API key and run OMP/Pi `/login` for `Cline Pass`, or set `CLINE_PASS_API_KEY`. Existing Cline local auth can be inspected with `/clinepass doctor`; local Cline account-token reuse is disabled by default and can be tried with `CLINE_PASS_IMPORT_LOCAL=1`.
+For auth, run OMP/Pi `/login` for `Cline Pass` and sign in with your Cline account in the browser. API keys still work through the `/login` fallback or `CLINE_PASS_API_KEY`. Existing Cline local auth can be inspected with `/clinepass doctor`; local Cline account-token reuse is disabled by default and can be tried with `CLINE_PASS_IMPORT_LOCAL=1`.
 
-## Install
+## Custom Extension
+
+Build once, then load the extension explicitly:
 
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.1
+git clone https://github.com/rabesss/cline-pass-extension.git
+cd cline-pass-extension
+npm install
+npm run build
+omp -e ./dist/extension.js
 ```
 
 ```bash
-pi install git:github.com/rabesss/cline-pass-extension@v0.2.1
+pi -e ./dist/extension.js
 ```
 
-For local development:
+After OMP/Pi starts with `-e`, run `/login` and select `Cline Pass`. First-run onboarding may show only built-in providers; skip setup and use `/login` in the normal session.
+
+## Optional Install
 
 ```bash
-omp -e /path/to/cline-pass-extension
-pi -e /path/to/cline-pass-extension
+omp plugin install github:rabesss/cline-pass-extension#v0.2.2
 ```
 
-To make the provider appear in OMP `/login`, install or link the plugin first:
-
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.1
-# or, from this checkout:
-omp plugin link .
+pi install git:github.com/rabesss/cline-pass-extension@v0.2.2
 ```
 
 ## Provider
@@ -59,6 +62,8 @@ CLINE_DATA_DIR/settings/providers.json
 ~/.cline/data/settings/providers.json
 ```
 
+`/login` uses the same Cline account device authorization flow as the Cline CLI, then stores the resulting provider credentials in OMP/Pi. Set `CLINE_PASS_LOGIN_MODE=api-key` only if you want to skip browser sign-in and paste an API key directly.
+
 ## Commands
 
 ```text
@@ -79,4 +84,4 @@ Useful options:
 
 ## Safety
 
-The extension never prints Cline access or refresh tokens in command output. `/login` stores only the credential you provide to OMP/Pi; local Cline provider tokens are not copied unless you explicitly set `CLINE_PASS_IMPORT_LOCAL=1`.
+The extension never prints Cline access or refresh tokens in command output. `/login` stores only the Cline account or API-key credential returned through OMP/Pi; local Cline provider tokens are not copied unless you explicitly set `CLINE_PASS_IMPORT_LOCAL=1`.

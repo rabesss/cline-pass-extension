@@ -1,6 +1,6 @@
 {
   "name": "@rabesss/cline-pass-extension",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Dependency-free Pi and OMP provider extension for Cline Pass.",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "npm run build && node --test",
-    "prepare": "npm run build",
     "test": "node --test"
   },
   "devDependencies": {
