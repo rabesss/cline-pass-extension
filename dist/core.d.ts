@@ -6,6 +6,8 @@ export declare const CLINE_PASS_OMP_AGENT_DB_ENV_VAR = "CLINE_PASS_OMP_AGENT_DB"
 export declare const DEFAULT_MODEL = "glm-5.2";
 type Env = Record<string, string | undefined>;
 type JsonRecord = Record<string, any>;
+type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ReasoningOption = boolean | ReasoningLevel;
 type FetchLike = (url: string, init?: RequestInit) => Promise<ResponseLike>;
 interface HeadersLike {
     forEach(callback: (value: string, key: string) => void): void;
@@ -171,6 +173,8 @@ interface RuntimeModel {
     api?: string;
     provider?: string;
     id?: string;
+    reasoning?: boolean;
+    thinkingLevelMap?: Partial<Record<ReasoningLevel, string | null>>;
     maxTokens?: number;
     cost?: Cost;
 }
@@ -192,6 +196,10 @@ interface StreamContext {
 interface StreamOptions {
     apiKey?: string;
     maxTokens?: number;
+    reasoning?: ReasoningOption;
+    reasoningEffort?: ReasoningOption;
+    reasoning_effort?: ReasoningOption;
+    metadata?: Record<string, unknown>;
     toolChoice?: unknown;
     signal?: AbortSignal;
     onPayload?: (payload: JsonRecord, model?: RuntimeModel) => void | Promise<void>;

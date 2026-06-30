@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   buildProviderConfig,
   CLINE_PASS_API_KEY_ENV_VAR,
+  CLINE_PASS_MODELS,
   CLINE_PASS_OMP_AGENT_DB_ENV_VAR,
   createStreamClinePass,
   doctorClinePass,
@@ -33,6 +34,13 @@ test("buildProviderConfig registers direct Cline API models", () => {
   assert.equal(config.authHeader, true);
   assert.equal(typeof config.streamSimple, "function");
   assert.ok(config.models.some(model => model.id === "glm-5.2" && model.wireId === "cline-pass/glm-5.2"));
+});
+
+test("README lists every registered Cline Pass selector", async () => {
+  const readme = await fs.readFile(new URL("../README.md", import.meta.url), "utf8");
+  for (const model of CLINE_PASS_MODELS) {
+    assert.match(readme, new RegExp(`^${model.wireId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  }
 });
 
 test("buildProviderConfig uses OMP OAuth adapter by default", () => {
@@ -455,7 +463,10 @@ test("createStreamClinePass maps clean selector ids and streams text deltas", as
       request = { url, init };
       return sseResponse([
         { choices: [{ delta: { content: "hel" } }] },
-        { choices: [{ delta: { content: "lo" }, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } },
+        {
+          choices: [{ delta: { content: "lo" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3, completion_tokens_details: { reasoning_tokens: 1 } },
+        },
       ]);
     },
   })(
@@ -472,7 +483,67 @@ test("createStreamClinePass maps clean selector ids and streams text deltas", as
   assert.equal(JSON.parse(request.init.body).model, "cline-pass/glm-5.2");
   assert.equal(JSON.parse(request.init.body).stream, true);
   assert.deepEqual(events.filter(event => event.type === "text_delta").map(event => event.delta), ["hel", "lo"]);
+  assert.equal(events.at(-1).message.usage.reasoning, 1);
   assert.equal(events.at(-1).type, "done");
+});
+
+test("createStreamClinePass forwards OMP reasoning effort", async () => {
+  let payload;
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", reasoning: true, maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1", reasoning: "high", onPayload: body => { payload = body; } },
+  );
+
+  for await (const _event of stream) {}
+
+  assert.equal(payload.reasoning_effort, "high");
+});
+
+test("createStreamClinePass omits reasoning effort when reasoning is off", async () => {
+  let payload;
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", reasoning: true, maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1", reasoning: "off", onPayload: body => { payload = body; } },
+  );
+
+  for await (const _event of stream) {}
+
+  assert.equal("reasoning_effort" in payload, false);
+});
+
+test("createStreamClinePass emits streamed reasoning as thinking blocks", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([
+      { choices: [{ delta: { reasoning: "think" } }] },
+      { choices: [{ delta: { content: "done" }, finish_reason: "stop" }] },
+    ]),
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.deepEqual(events.map(event => event.type), [
+    "start",
+    "thinking_start",
+    "thinking_delta",
+    "thinking_end",
+    "text_start",
+    "text_delta",
+    "text_end",
+    "done",
+  ]);
+  assert.equal(events.find(event => event.type === "thinking_delta").delta, "think");
+  assert.deepEqual(events.at(-1).message.content.map(content => content.type), ["thinking", "text"]);
 });
 
 test("createStreamClinePass accepts OMP OAuth credential JSON blobs", async () => {

@@ -18,9 +18,12 @@ export const DEFAULT_MODEL = "glm-5.2";
 const DEFAULT_WIRE_MODEL = "cline-pass/glm-5.2";
 const DEFAULT_SOURCE_PATH = "~/.cline/data/settings/providers.json";
 const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+const REASONING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
 type Env = Record<string, string | undefined>;
 type JsonRecord = Record<string, any>;
+type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ReasoningOption = boolean | ReasoningLevel;
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<ResponseLike>;
 
@@ -236,6 +239,7 @@ interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  reasoning?: number;
   totalTokens: number;
   cost: Cost & { total: number };
 }
@@ -244,6 +248,8 @@ interface RuntimeModel {
   api?: string;
   provider?: string;
   id?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Partial<Record<ReasoningLevel, string | null>>;
   maxTokens?: number;
   cost?: Cost;
 }
@@ -269,6 +275,10 @@ interface StreamContext {
 interface StreamOptions {
   apiKey?: string;
   maxTokens?: number;
+  reasoning?: ReasoningOption;
+  reasoningEffort?: ReasoningOption;
+  reasoning_effort?: ReasoningOption;
+  metadata?: Record<string, unknown>;
   toolChoice?: unknown;
   signal?: AbortSignal;
   onPayload?: (payload: JsonRecord, model?: RuntimeModel) => void | Promise<void>;
@@ -975,6 +985,8 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
           stream: true,
           max_tokens: Math.min(options.maxTokens || model?.maxTokens || 16384, model?.maxTokens || 16384),
         };
+        const reasoningEffort = resolveReasoningEffort(model, options);
+        if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
         const tools = toolsToOpenAI(context?.tools);
         if (tools.length > 0) payload.tools = tools;
         if (options.toolChoice) payload.tool_choice = options.toolChoice;
@@ -1026,8 +1038,17 @@ async function consumeOpenAIStream(
 ): Promise<StreamConsumeResult> {
   let textBlock: JsonRecord | undefined;
   let textIndex = -1;
+  let thinkingBlock: JsonRecord | undefined;
+  let thinkingIndex = -1;
   let finishReason: unknown;
   const toolCalls = new Map<number, PendingToolCall>();
+
+  function endThinkingBlock(): void {
+    if (!thinkingBlock) return;
+    stream.push({ type: "thinking_end", contentIndex: thinkingIndex, content: stringValue(thinkingBlock.thinking), partial: output });
+    thinkingBlock = undefined;
+    thinkingIndex = -1;
+  }
 
   for await (const payload of readOpenAISsePayloads(body)) {
     if (payload === "[DONE]") break;
@@ -1044,8 +1065,21 @@ async function consumeOpenAIStream(
     if (choice.finish_reason) finishReason = choice.finish_reason;
     const delta = choice.delta || {};
 
+    const reasoning = stringValue(delta.reasoning) || stringValue(delta.reasoning_content);
+    if (reasoning) {
+      if (!thinkingBlock) {
+        thinkingBlock = { type: "thinking", thinking: "" };
+        thinkingIndex = output.content.length;
+        output.content.push(thinkingBlock);
+        stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
+      }
+      thinkingBlock.thinking = `${stringValue(thinkingBlock.thinking)}${reasoning}`;
+      stream.push({ type: "thinking_delta", contentIndex: thinkingIndex, delta: reasoning, partial: output });
+    }
+
     const content = stringValue(delta.content);
     if (content) {
+      endThinkingBlock();
       if (!textBlock) {
         textBlock = { type: "text", text: "" };
         textIndex = output.content.length;
@@ -1057,6 +1091,7 @@ async function consumeOpenAIStream(
     }
 
     const deltaToolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+    if (deltaToolCalls.length > 0) endThinkingBlock();
     for (const tool of deltaToolCalls) {
       const index = typeof tool.index === "number" ? tool.index : toolCalls.size;
       const pending = toolCalls.get(index) || { id: "", name: "", arguments: "" };
@@ -1069,6 +1104,7 @@ async function consumeOpenAIStream(
     }
   }
 
+  endThinkingBlock();
   if (textBlock) {
     stream.push({ type: "text_end", contentIndex: textIndex, content: stringValue(textBlock.text), partial: output });
   }
@@ -1088,6 +1124,15 @@ async function consumeOpenAINonStreamingFallback(
 
   applyUsage(output.usage, data?.usage, model);
   const message = data?.choices?.[0]?.message || {};
+  const reasoning = stringValue(message.reasoning) || stringValue(message.reasoning_content);
+  if (reasoning) {
+    const thinkingBlock = { type: "thinking", thinking: reasoning };
+    const index = output.content.length;
+    output.content.push(thinkingBlock);
+    stream.push({ type: "thinking_start", contentIndex: index, partial: output });
+    stream.push({ type: "thinking_delta", contentIndex: index, delta: reasoning, partial: output });
+    stream.push({ type: "thinking_end", contentIndex: index, content: reasoning, partial: output });
+  }
   const content = stringValue(message.content);
   if (content) {
     const textBlock = { type: "text", text: content };
@@ -1422,6 +1467,8 @@ function parseToolArguments(input: unknown): JsonRecord {
 function applyUsage(usage: Usage, source?: JsonRecord, model: RuntimeModel = {}): void {
   usage.input = numberValue(source?.prompt_tokens);
   usage.output = numberValue(source?.completion_tokens);
+  const reasoningTokens = source?.completion_tokens_details?.reasoning_tokens;
+  if (typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)) usage.reasoning = reasoningTokens;
   usage.totalTokens = numberValue(source?.total_tokens) || usage.input + usage.output;
   if (!model?.cost) return;
   usage.cost.input = (model.cost.input / 1_000_000) * usage.input;
@@ -1661,6 +1708,30 @@ function sanitizeErrorDetail(input: string): string {
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function resolveReasoningEffort(model: RuntimeModel | undefined, options: StreamOptions): string | undefined {
+  if (!model?.reasoning) return undefined;
+  const requested =
+    readReasoningOption(options, "reasoning") ??
+    readReasoningOption(options, "reasoningEffort") ??
+    readReasoningOption(options, "reasoning_effort") ??
+    readReasoningOption(options.metadata, "reasoning") ??
+    readReasoningOption(options.metadata, "reasoningEffort") ??
+    readReasoningOption(options.metadata, "reasoning_effort");
+  if (requested === undefined || requested === false || requested === "off") return undefined;
+  const level: ReasoningLevel = requested === true ? "high" : requested;
+  const mapped = model.thinkingLevelMap?.[level];
+  if (mapped === null) return undefined;
+  return stringValue(mapped) || level;
+}
+
+function readReasoningOption(source: unknown, key: string): ReasoningOption | undefined {
+  if (!source || typeof source !== "object") return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  if (value === true || value === false) return value;
+  if (typeof value === "string" && REASONING_LEVELS.has(value)) return value as ReasoningLevel;
+  return undefined;
 }
 
 function toWireModelId(model: unknown): string {

@@ -1,6 +1,6 @@
 {
   "name": "@rabesss/cline-pass-extension",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Dependency-free Pi and OMP provider extension for Cline Pass.",
   "type": "module",
   "license": "MIT",

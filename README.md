@@ -36,13 +36,13 @@ If first-run onboarding shows only built-in providers, skip setup and use
 OMP:
 
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.3
+omp plugin install github:rabesss/cline-pass-extension#v0.2.4
 ```
 
 Pi:
 
 ```bash
-pi install git:github.com/rabesss/cline-pass-extension@v0.2.3
+pi install git:github.com/rabesss/cline-pass-extension@v0.2.4
 ```
 
 ## Authentication
@@ -89,9 +89,20 @@ Selectors include:
 ```text
 cline-pass/glm-5.2
 cline-pass/kimi-k2.7-code
+cline-pass/kimi-k2.6
 cline-pass/deepseek-v4-pro
+cline-pass/deepseek-v4-flash
+cline-pass/mimo-v2.5
+cline-pass/mimo-v2.5-pro
+cline-pass/minimax-m3
 cline-pass/qwen3.7-max
+cline-pass/qwen3.7-plus
 ```
+
+All registered models are marked as reasoning-capable. When OMP/Pi passes a
+reasoning level, the extension forwards it to Cline as OpenAI-compatible
+`reasoning_effort`. Streamed `delta.reasoning` content is emitted back to OMP/Pi
+as thinking blocks.
 
 ## Commands
 
