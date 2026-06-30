@@ -1,9 +1,19 @@
 # Cline Pass Provider
 
-Dependency-free Pi and OMP provider extension for Cline Pass.
+Dependency-free OMP and Pi provider extension for Cline Pass.
 
 It registers a `cline-pass` provider backed by Cline's OpenAI-compatible API.
 Sign in with `/login` and choose `Cline Pass`.
+
+## Support Scope
+
+This extension currently supports **Cline Pass inference only**. It registers
+the `cline-pass` provider and the `cline-pass/*` model selectors listed below.
+
+The browser sign-in is the normal Cline account login flow, and the extension
+can also reuse an existing local Cline account token when explicitly opted in.
+Those are credential sources for Cline Pass requests; they do not add a
+separate `cline` provider or Cline's regular/free model selectors.
 
 ## Run From Source
 
@@ -36,20 +46,21 @@ If first-run onboarding shows only built-in providers, skip setup and use
 OMP:
 
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.5
+omp plugin install github:rabesss/cline-pass-extension#v0.2.6
 ```
 
 Pi:
 
 ```bash
-pi install git:github.com/rabesss/cline-pass-extension@v0.2.5
+pi install git:github.com/rabesss/cline-pass-extension@v0.2.6
 ```
 
 ## Authentication
 
 Run `/login`, select `Cline Pass`, and sign in with your Cline account in the
-browser. API keys are also supported through the `/login` fallback or
-`CLINE_PASS_API_KEY`.
+browser. This is the same Cline account login surface, but the stored credential
+is used by this extension for Cline Pass models. API keys are also supported
+through the `/login` fallback or `CLINE_PASS_API_KEY`.
 
 `/login` uses the same Cline account device authorization flow as the Cline CLI,
 then stores the resulting provider credentials in OMP/Pi. Set
@@ -66,7 +77,7 @@ saved OMP/Pi /login credential
 ```
 
 When `CLINE_PASS_IMPORT_LOCAL=1` is set, the extension can also inspect local
-Cline settings:
+Cline settings for an existing Cline account token:
 
 ```text
 CLINE_PROVIDERS_JSON
