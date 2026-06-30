@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ export const CLINE_WORKOS_ACCESS_TOKEN_PREFIX = "workos:";
 export const CLINE_PASS_API_KEY_ENV_VAR = "CLINE_PASS_API_KEY";
 export const CLINE_API_KEY_ENV_VAR = "CLINE_API_KEY";
 export const CLINE_PASS_ACCESS_TOKEN_ENV_VAR = "CLINE_PASS_ACCESS_TOKEN";
+export const CLINE_PASS_OMP_AGENT_DB_ENV_VAR = "CLINE_PASS_OMP_AGENT_DB";
 export const DEFAULT_MODEL = "glm-5.2";
 export const DEFAULT_WIRE_MODEL = "cline-pass/glm-5.2";
 export const DEFAULT_SOURCE_PATH = "~/.cline/data/settings/providers.json";
@@ -62,7 +64,7 @@ interface OAuthAdapter {
 export interface ProviderConfig {
   name: string;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
   authHeader: boolean;
   api: string;
   streamSimple: StreamFunction;
@@ -340,10 +342,9 @@ export const CLINE_PASS_MODELS: ClinePassModel[] = ([
 }));
 
 export function buildProviderConfig(options: BuildProviderOptions = {}): ProviderConfig {
-  return {
+  const config: ProviderConfig = {
     name: PROVIDER_NAME,
     baseUrl: options.baseUrl || process.env.CLINE_PASS_API_BASE || CLINE_API_BASE,
-    apiKey: options.apiKey || CLINE_PASS_API_KEY_ENV_VAR,
     authHeader: true,
     api: "cline-pass-custom",
     streamSimple: options.streamSimple || createStreamClinePass(options),
@@ -355,6 +356,9 @@ export function buildProviderConfig(options: BuildProviderOptions = {}): Provide
     },
     models: CLINE_PASS_MODELS,
   };
+  const apiKey = stringValue(options.apiKey);
+  if (apiKey) config.apiKey = apiKey;
+  return config;
 }
 
 export function expandHome(input: string, env: Env = process.env): string {
@@ -1173,19 +1177,32 @@ function toSafeResult(result: CommandResult): CommandResult {
 
 async function resolveRuntimeApiKey(options: RuntimeApiKeyOptions = {}, env: Env = process.env): Promise<string> {
   const optionKey = stringValue(options.apiKey);
-  if (optionKey && !isEnvVarReference(optionKey)) return optionKey;
+  if (optionKey && !isEnvVarReference(optionKey)) {
+    return accessTokenFromRuntimeOption(optionKey) || optionKey;
+  }
   const envApiKey = stringValue(env.CLINE_PASS_API_KEY) || stringValue(env.CLINE_API_KEY);
   if (envApiKey) return envApiKey;
   const envAccessToken = stringValue(env.CLINE_PASS_ACCESS_TOKEN);
   if (envAccessToken) return formatClineAccountAccessToken(envAccessToken);
-  if (env.CLINE_PASS_IMPORT_LOCAL !== "1") return "";
-  const readOptions: ReadCredentialsOptions = {
-    env,
-    persist: false,
-  };
-  if (options.baseUrl) readOptions.baseUrl = options.baseUrl;
-  if (options.fetchImpl) readOptions.fetchImpl = options.fetchImpl;
-  return readClinePassAccessToken(readOptions).catch(() => "");
+  if (env.CLINE_PASS_IMPORT_LOCAL === "1") {
+    const readOptions: ReadCredentialsOptions = {
+      env,
+      persist: false,
+    };
+    if (options.baseUrl) readOptions.baseUrl = options.baseUrl;
+    if (options.fetchImpl) readOptions.fetchImpl = options.fetchImpl;
+    return readClinePassAccessToken(readOptions).catch(() => "");
+  }
+  const stored = await readOmpSavedClinePassCredentials(env).catch(() => undefined);
+  if (stored) {
+    if (!isExpired(stored.expires, 60_000)) return stored.access;
+    const refreshOptions: RefreshCredentialsOptions = {};
+    if (options.baseUrl) refreshOptions.baseUrl = options.baseUrl;
+    if (options.fetchImpl) refreshOptions.fetchImpl = options.fetchImpl;
+    const refreshed = await refreshClinePassCredentials(stored, refreshOptions).catch(() => undefined);
+    if (refreshed?.access) return refreshed.access;
+  }
+  return "";
 }
 
 function missingApiKeyMessage(): string {
@@ -1193,7 +1210,122 @@ function missingApiKeyMessage(): string {
 }
 
 function isEnvVarReference(value: string): boolean {
-  return [CLINE_PASS_API_KEY_ENV_VAR, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR].includes(value);
+  return [CLINE_PASS_API_KEY_ENV_VAR, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR].some(
+    key => value === key || value === `$${key}` || value === `\${${key}}`,
+  );
+}
+
+function accessTokenFromRuntimeOption(value: string): string {
+  if (!value.startsWith("{")) return "";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return "";
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
+  const record = parsed as JsonRecord;
+  const key = stringValue(record.key);
+  if (key) return key;
+  return credentialsFromStoredOAuthData(record)?.access || "";
+}
+
+async function readOmpSavedClinePassCredentials(env: Env = process.env): Promise<Credentials | undefined> {
+  for (const dbPath of resolveOmpAgentDbPathCandidates(env)) {
+    if (!(await fileExists(dbPath))) continue;
+    const raw = await readOmpAuthCredentialData(dbPath);
+    const credentials = raw ? credentialsFromStoredOAuthData(raw) : undefined;
+    if (credentials?.access) return credentials;
+  }
+  return undefined;
+}
+
+function resolveOmpAgentDbPathCandidates(env: Env = process.env): string[] {
+  const explicit = stringValue(env[CLINE_PASS_OMP_AGENT_DB_ENV_VAR]);
+  if (explicit) return [path.resolve(expandHome(explicit, env))];
+
+  const candidates = new Set<string>();
+  const home = env.HOME || os.homedir();
+  const agentDir = stringValue(env.PI_CODING_AGENT_DIR) || stringValue(env.OMP_AGENT_DIR);
+  if (agentDir) candidates.add(path.resolve(expandHome(path.join(agentDir, "agent.db"), env)));
+
+  const configDir = stringValue(env.PI_CONFIG_DIR) || ".omp";
+  const profile = normalizeOmpProfileName(stringValue(env.OMP_PROFILE) || stringValue(env.PI_PROFILE));
+  const xdgDataHome = stringValue(env.XDG_DATA_HOME);
+  if (profile) {
+    candidates.add(path.join(home, configDir, "profiles", profile, "agent", "agent.db"));
+    if (xdgDataHome) candidates.add(path.join(expandHome(xdgDataHome, env), "omp", "profiles", profile, "agent.db"));
+  } else if (xdgDataHome) {
+    candidates.add(path.join(expandHome(xdgDataHome, env), "omp", "agent.db"));
+  }
+  candidates.add(path.join(home, configDir, "agent", "agent.db"));
+
+  return [...candidates];
+}
+
+function normalizeOmpProfileName(value: string): string {
+  if (!value || value === "default") return "";
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value) ? value : "";
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  return fs
+    .stat(filePath)
+    .then(stat => stat.isFile())
+    .catch(() => false);
+}
+
+const OMP_AUTH_SQL = [
+  "SELECT data FROM auth_credentials",
+  "WHERE provider = ? AND credential_type = 'oauth' AND disabled_cause IS NULL",
+  "ORDER BY updated_at DESC, id DESC LIMIT 1",
+].join(" ");
+
+const OMP_AUTH_SQLITE_CLI_SQL = `${OMP_AUTH_SQL.replace("provider = ?", `provider = '${PROVIDER_ID}'`)};`;
+
+async function readOmpAuthCredentialData(dbPath: string): Promise<string> {
+  return (await readOmpAuthCredentialDataWithBunSqlite(dbPath)) || readOmpAuthCredentialDataWithSqliteCli(dbPath);
+}
+
+interface BunSqliteStatement {
+  get(...params: unknown[]): unknown;
+}
+
+interface BunSqliteDatabase {
+  query(sql: string): BunSqliteStatement;
+  close(): void;
+}
+
+type BunSqliteDatabaseConstructor = new (dbPath: string, options?: { readonly?: boolean }) => BunSqliteDatabase;
+
+async function readOmpAuthCredentialDataWithBunSqlite(dbPath: string): Promise<string> {
+  try {
+    const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
+    const mod = await dynamicImport("bun:sqlite") as { Database?: BunSqliteDatabaseConstructor };
+    if (typeof mod.Database !== "function") return "";
+    const db = new mod.Database(dbPath, { readonly: true });
+    try {
+      const row = db.query(OMP_AUTH_SQL).get(PROVIDER_ID) as { data?: unknown } | undefined;
+      return stringValue(row?.data);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return "";
+  }
+}
+
+function readOmpAuthCredentialDataWithSqliteCli(dbPath: string): string {
+  try {
+    const result = spawnSync("sqlite3", ["-batch", "-noheader", "-readonly", dbPath, OMP_AUTH_SQLITE_CLI_SQL], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+    });
+    if (result.status !== 0 || result.error) return "";
+    return stringValue(result.stdout);
+  } catch {
+    return "";
+  }
 }
 
 function messagesToOpenAI(context: StreamContext = {}): JsonRecord[] {
@@ -1356,6 +1488,33 @@ function credentialsFromAuth(auth?: ClineProviderAuth, accessOverride?: string):
     refresh,
     expires: clineAccountExpiryTimeMs(auth, access) || Date.now() - 1,
   };
+}
+
+function credentialsFromStoredOAuthData(data: string | JsonRecord): Credentials | undefined {
+  let record: JsonRecord;
+  if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+      record = parsed as JsonRecord;
+    } catch {
+      return undefined;
+    }
+  } else {
+    record = data;
+  }
+
+  const access = stringValue(record.access) || stringValue(record.accessToken);
+  if (!access) return undefined;
+  const refresh = stringValue(record.refresh) || stringValue(record.refreshToken) || access;
+  if (refresh === access) return credentialsFromApiKey(access);
+
+  return credentialsFromAuth({
+    accessToken: access,
+    refreshToken: refresh,
+    expiresAt: record.expires ?? record.expiresAt,
+    accountId: stringValue(record.accountId),
+  });
 }
 
 function credentialsFromApiKey(apiKey: string): Credentials {

@@ -27,11 +27,11 @@ After OMP/Pi starts with `-e`, run `/login` and select `Cline Pass`. First-run o
 ## Optional Install
 
 ```bash
-omp plugin install github:rabesss/cline-pass-extension#v0.2.2
+omp plugin install github:rabesss/cline-pass-extension#v0.2.3
 ```
 
 ```bash
-pi install git:github.com/rabesss/cline-pass-extension@v0.2.2
+pi install git:github.com/rabesss/cline-pass-extension@v0.2.3
 ```
 
 ## Provider
@@ -57,9 +57,10 @@ Token lookup order:
 CLINE_PASS_API_KEY
 CLINE_API_KEY
 CLINE_PASS_ACCESS_TOKEN
-CLINE_PROVIDERS_JSON
-CLINE_DATA_DIR/settings/providers.json
-~/.cline/data/settings/providers.json
+CLINE_PROVIDERS_JSON, if CLINE_PASS_IMPORT_LOCAL=1
+CLINE_DATA_DIR/settings/providers.json, if CLINE_PASS_IMPORT_LOCAL=1
+~/.cline/data/settings/providers.json, if CLINE_PASS_IMPORT_LOCAL=1
+saved OMP/Pi /login credential
 ```
 
 `/login` uses the same Cline account device authorization flow as the Cline CLI, then stores the resulting provider credentials in OMP/Pi. Set `CLINE_PASS_LOGIN_MODE=api-key` only if you want to skip browser sign-in and paste an API key directly.

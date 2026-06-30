@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import test from "node:test";
 import {
   buildProviderConfig,
   CLINE_PASS_API_KEY_ENV_VAR,
+  CLINE_PASS_OMP_AGENT_DB_ENV_VAR,
   createStreamClinePass,
   doctorClinePass,
   findClinePassProvider,
@@ -33,12 +35,12 @@ test("buildProviderConfig registers direct Cline API models", () => {
   assert.ok(config.models.some(model => model.id === "glm-5.2" && model.wireId === "cline-pass/glm-5.2"));
 });
 
-test("buildProviderConfig uses env fallback and OMP OAuth adapter by default", () => {
+test("buildProviderConfig uses OMP OAuth adapter by default", () => {
   const config = withProcessEnv({ CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_ACCESS_TOKEN: "" }, () =>
     buildProviderConfig(),
   );
 
-  assert.equal(config.apiKey, CLINE_PASS_API_KEY_ENV_VAR);
+  assert.equal(config.apiKey, undefined);
   assert.equal(config.oauth.name, "Cline Pass");
   assert.equal(typeof config.oauth.login, "function");
   assert.equal(typeof config.oauth.refreshToken, "function");
@@ -425,7 +427,7 @@ test("verifyClinePass requires explicit local Cline token import", async () => {
         return jsonResponse({});
       },
     },
-    { CLINE_PROVIDERS_JSON: source },
+    { CLINE_PROVIDERS_JSON: source, [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: path.join(tempDir, "missing-agent.db") },
   );
 
   assert.equal(called, false);
@@ -471,6 +473,70 @@ test("createStreamClinePass maps clean selector ids and streams text deltas", as
   assert.equal(JSON.parse(request.init.body).stream, true);
   assert.deepEqual(events.filter(event => event.type === "text_delta").map(event => event.delta), ["hel", "lo"]);
   assert.equal(events.at(-1).type, "done");
+});
+
+test("createStreamClinePass accepts OMP OAuth credential JSON blobs", async () => {
+  let request;
+  const stream = createStreamClinePass({
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]);
+    },
+  })(
+    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { messages: [{ role: "user", content: "hi" }] },
+    {
+      apiKey: JSON.stringify({
+        access: "workos:json-token",
+        refresh: "json-refresh-token",
+        expires: Date.now() + 3_600_000,
+      }),
+    },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+
+  assert.equal(request.url, "https://api.cline.bot/api/v1/chat/completions");
+  assert.equal(request.init.headers.Authorization, "Bearer workos:json-token");
+  assert.equal(events.at(-1).type, "done");
+});
+
+test("createStreamClinePass falls back to saved OMP OAuth credentials when apiKey is a placeholder", async () => {
+  if (!hasSqlite3()) return;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
+  const dbPath = await createOmpAuthDb(tempDir, {
+    access: "workos:db-token",
+    refresh: "db-refresh-token",
+    expires: Date.now() + 3_600_000,
+  });
+  let request;
+
+  await withProcessEnv({
+    [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: dbPath,
+    CLINE_PASS_API_KEY: "",
+    CLINE_API_KEY: "",
+    CLINE_PASS_ACCESS_TOKEN: "",
+    CLINE_PASS_IMPORT_LOCAL: "",
+  }, async () => {
+    const stream = createStreamClinePass({
+      fetchImpl: async (url, init) => {
+        request = { url, init };
+        return sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]);
+      },
+    })(
+      { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+      { messages: [{ role: "user", content: "hi" }] },
+      { apiKey: CLINE_PASS_API_KEY_ENV_VAR },
+    );
+
+    const events = [];
+    for await (const event of stream) events.push(event);
+    assert.equal(events.at(-1).type, "done");
+  });
+
+  assert.equal(request.url, "https://api.cline.bot/api/v1/chat/completions");
+  assert.equal(request.init.headers.Authorization, "Bearer workos:db-token");
 });
 
 test("createStreamClinePass uses injected fetch and base URL for explicit local token import", async () => {
@@ -519,7 +585,14 @@ test("createStreamClinePass does not use local Cline tokens unless explicitly op
   let called = false;
   const events = [];
 
-  await withProcessEnv({ CLINE_PROVIDERS_JSON: source, CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_ACCESS_TOKEN: "", CLINE_PASS_IMPORT_LOCAL: "" }, async () => {
+  await withProcessEnv({
+    CLINE_PROVIDERS_JSON: source,
+    [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: path.join(tempDir, "missing-agent.db"),
+    CLINE_PASS_API_KEY: "",
+    CLINE_API_KEY: "",
+    CLINE_PASS_ACCESS_TOKEN: "",
+    CLINE_PASS_IMPORT_LOCAL: "",
+  }, async () => {
     const stream = createStreamClinePass({
       fetchImpl: async () => {
         called = true;
@@ -669,6 +742,33 @@ function sseResponse(chunks, init = {}) {
       throw new Error("streaming response");
     },
   };
+}
+
+function hasSqlite3() {
+  const result = spawnSync("sqlite3", ["-version"], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+async function createOmpAuthDb(tempDir, credentials) {
+  const dbPath = path.join(tempDir, "agent.db");
+  const data = JSON.stringify(credentials).replaceAll("'", "''");
+  const sql = `
+    CREATE TABLE auth_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      credential_type TEXT NOT NULL,
+      data TEXT NOT NULL,
+      disabled_cause TEXT DEFAULT NULL,
+      identity_key TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL DEFAULT 1
+    );
+    INSERT INTO auth_credentials (provider, credential_type, data, identity_key, created_at, updated_at)
+    VALUES ('cline-pass', 'oauth', '${data}', 'account:test', 1, 2);
+  `;
+  const result = spawnSync("sqlite3", [dbPath], { input: sql, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  return dbPath;
 }
 
 function withProcessEnv(overrides, callback) {
