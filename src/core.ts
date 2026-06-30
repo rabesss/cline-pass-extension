@@ -4,20 +4,20 @@ import os from "node:os";
 import path from "node:path";
 
 export const PROVIDER_ID = "cline-pass";
-export const CLINE_ACCOUNT_PROVIDER_ID = "cline";
+const CLINE_ACCOUNT_PROVIDER_ID = "cline";
 export const PROVIDER_NAME = "Cline Pass";
 export const CLINE_API_BASE = "https://api.cline.bot/api/v1";
-export const CLINE_WORKOS_API_BASE = "https://api.workos.com";
-export const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
-export const CLINE_WORKOS_ACCESS_TOKEN_PREFIX = "workos:";
+const CLINE_WORKOS_API_BASE = "https://api.workos.com";
+const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
+const CLINE_WORKOS_ACCESS_TOKEN_PREFIX = "workos:";
 export const CLINE_PASS_API_KEY_ENV_VAR = "CLINE_PASS_API_KEY";
-export const CLINE_API_KEY_ENV_VAR = "CLINE_API_KEY";
-export const CLINE_PASS_ACCESS_TOKEN_ENV_VAR = "CLINE_PASS_ACCESS_TOKEN";
+const CLINE_API_KEY_ENV_VAR = "CLINE_API_KEY";
+const CLINE_PASS_ACCESS_TOKEN_ENV_VAR = "CLINE_PASS_ACCESS_TOKEN";
 export const CLINE_PASS_OMP_AGENT_DB_ENV_VAR = "CLINE_PASS_OMP_AGENT_DB";
 export const DEFAULT_MODEL = "glm-5.2";
-export const DEFAULT_WIRE_MODEL = "cline-pass/glm-5.2";
-export const DEFAULT_SOURCE_PATH = "~/.cline/data/settings/providers.json";
-export const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+const DEFAULT_WIRE_MODEL = "cline-pass/glm-5.2";
+const DEFAULT_SOURCE_PATH = "~/.cline/data/settings/providers.json";
+const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
 type Env = Record<string, string | undefined>;
 type JsonRecord = Record<string, any>;
@@ -320,7 +320,7 @@ type StreamFunction = (
 ) => AsyncIterable<StreamEvent>;
 
 export const CLINE_PASS_MODELS: ClinePassModel[] = ([
-  ["cline-pass/glm-5.2", "GLM 5.2"],
+  [DEFAULT_WIRE_MODEL, "GLM 5.2"],
   ["cline-pass/kimi-k2.7-code", "Kimi K2.7 Code"],
   ["cline-pass/kimi-k2.6", "Kimi K2.6"],
   ["cline-pass/deepseek-v4-pro", "DeepSeek V4 Pro"],
@@ -361,7 +361,7 @@ export function buildProviderConfig(options: BuildProviderOptions = {}): Provide
   return config;
 }
 
-export function expandHome(input: string, env: Env = process.env): string {
+function expandHome(input: string, env: Env = process.env): string {
   if (!input) return input;
   if (input === "~") return env.HOME || os.homedir();
   if (input.startsWith("~/")) return path.join(env.HOME || os.homedir(), input.slice(2));
@@ -422,7 +422,7 @@ export async function refreshClinePassAuth(refreshToken: string | undefined, opt
   const fetchImpl = options.fetchImpl || fetch;
   if (typeof fetchImpl !== "function") throw new Error("global fetch is not available; use Node 18+ or a runtime with fetch");
 
-  const baseUrl = (options.baseUrl || CLINE_API_BASE).replace(/\/+$/, "");
+  const baseUrl = normalizeBaseUrl(options.baseUrl || CLINE_API_BASE);
   const response = await fetchImpl(`${baseUrl}/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -478,8 +478,8 @@ export async function loginClineAccount(callbacks: LoginCallbacks = {}): Promise
   const fetchImpl: FetchLike = callbacks.fetch || (fetch as FetchLike);
   if (typeof fetchImpl !== "function") throw new Error("global fetch is not available; use Node 18+ or a runtime with fetch");
 
-  const apiBaseUrl = (process.env.CLINE_PASS_API_BASE || CLINE_API_BASE).replace(/\/+$/, "");
-  const workosApiBaseUrl = (process.env.CLINE_PASS_WORKOS_API_BASE || CLINE_WORKOS_API_BASE).replace(/\/+$/, "");
+  const apiBaseUrl = normalizeBaseUrl(process.env.CLINE_PASS_API_BASE || CLINE_API_BASE);
+  const workosApiBaseUrl = normalizeBaseUrl(process.env.CLINE_PASS_WORKOS_API_BASE || CLINE_WORKOS_API_BASE);
   const clientId = stringValue(process.env.CLINE_PASS_WORKOS_CLIENT_ID) || CLINE_WORKOS_CLIENT_ID;
   const device = await startClineDeviceAuthorization({ fetchImpl, workosApiBaseUrl, clientId, signal: callbacks.signal });
 
@@ -778,7 +778,7 @@ export async function verifyClinePass(options: VerifyOptions = {}, env: Env = pr
     };
   }
   const sentinel = "CLINE_PASS_EXTENSION_OK";
-  const response = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -989,7 +989,7 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
           body: JSON.stringify(payload),
         };
         if (options.signal) init.signal = options.signal;
-        const response = await fetchImpl(`${apiBase.replace(/\/+$/, "")}/chat/completions`, init);
+        const response = await fetchImpl(`${normalizeBaseUrl(apiBase)}/chat/completions`, init);
         if (typeof options.onResponse === "function") {
           await options.onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model);
         }
@@ -1657,6 +1657,10 @@ async function delay(ms: number, signal?: AbortSignal): Promise<void> {
 
 function sanitizeErrorDetail(input: string): string {
   return String(input).replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]");
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, "");
 }
 
 function toWireModelId(model: unknown): string {
