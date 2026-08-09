@@ -1,7 +1,7 @@
 import { sanitizeErrorDetail, stringValue } from "./utils.js";
 export function clineHTTPErrorMessage(status, body) {
     if (status === 401)
-        return "Cline API returned HTTP 401. Run /login and paste a Cline API key, refresh the Cline app session, or set CLINE_PASS_API_KEY.";
+        return "Cline API returned HTTP 401. Run /login again, refresh an imported Cline app session, or set CLINE_PASS_API_KEY.";
     const detail = stringValue(body?.error) || stringValue(body?.message);
     return detail ? `Cline API returned HTTP ${status}: ${sanitizeErrorDetail(detail)}` : `Cline API returned HTTP ${status}`;
 }
