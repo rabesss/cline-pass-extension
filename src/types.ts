@@ -96,6 +96,8 @@ export interface Credentials {
   access: string;
   refresh: string;
   expires: number;
+  accountId?: string;
+  email?: string;
 }
 
 export interface LoginCallbacks {
@@ -118,6 +120,7 @@ export interface ReadCredentialsOptions {
 export interface RefreshCredentialsOptions {
   baseUrl?: string;
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
 }
 
 export interface ClineProviderAuth {

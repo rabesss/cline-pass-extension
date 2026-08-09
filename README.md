@@ -10,10 +10,12 @@ Sign in with `/login` and choose `Cline Pass`.
 This extension currently supports **Cline Pass inference only**. It registers
 the `cline-pass` provider and the `cline-pass/*` model selectors listed below.
 
-The extension accepts Cline API keys through `/login` or environment variables.
-It can also reuse an existing local Cline account access token when explicitly
-opted in. Those are credential sources for Cline Pass requests; they do not add
-a separate `cline` provider or Cline's regular/free model selectors.
+The extension signs in to a Cline account through `/login` using Cline's current
+browser device-authorization flow. It also accepts Cline API keys through
+environment variables and can reuse an existing local Cline account access
+token when explicitly opted in. Those are credential sources for Cline Pass
+requests; they do not add a separate `cline` provider or Cline's regular/free
+model selectors.
 
 ## Run From Source
 
@@ -57,13 +59,12 @@ pi install git:github.com/rabesss/cline-pass-extension@v0.2.7
 
 ## Authentication
 
-Run `/login`, select `Cline Pass`, and paste a Cline API key from:
+Run `/login` and select `Cline Pass`. OMP/Pi opens Cline's current browser
+device-authorization page and displays a short verification code. Complete the
+browser sign-in; no local callback server or manual API-key copy is required.
 
-```text
-https://app.cline.bot/settings/api-keys
-```
-
-You can also set `CLINE_PASS_API_KEY`.
+For automation or an existing programmatic credential, you can instead set
+`CLINE_PASS_API_KEY` or `CLINE_API_KEY`.
 
 Default token lookup order:
 
@@ -71,7 +72,7 @@ Default token lookup order:
 CLINE_PASS_API_KEY
 CLINE_API_KEY
 CLINE_PASS_ACCESS_TOKEN
-saved OMP/Pi /login API-key credential
+saved OMP/Pi /login account or API-key credential
 ```
 
 When `CLINE_PASS_IMPORT_LOCAL=1` is set, the extension can also inspect local
@@ -83,10 +84,11 @@ CLINE_DATA_DIR/settings/providers.json
 ~/.cline/data/settings/providers.json
 ```
 
-Local Cline settings are read-only. The extension does not run Cline account
-login, does not call Cline's token refresh endpoint, and does not write back to
-`providers.json`. If the imported local token is expired, refresh or sign in
-with the Cline app and try again, or use a Cline API key.
+Local Cline settings are read-only and the extension never writes back to
+`providers.json`. Credentials created by this extension's `/login` flow are
+stored and refreshed through OMP/Pi. An explicitly imported local token is not
+modified; if it is expired, sign in with `/login` or refresh the Cline app
+session first.
 
 Use `/clinepass doctor` to check which auth sources are visible.
 
@@ -199,7 +201,9 @@ Useful options:
 
 ## Safety
 
-The extension never prints Cline access or refresh tokens in command output.
-`/login` stores only the API-key credential returned through OMP/Pi. Local
-Cline provider tokens are only read when you explicitly set
-`CLINE_PASS_IMPORT_LOCAL=1`, and they are never modified by this extension.
+The extension never prints Cline access tokens, refresh tokens, or device codes
+in command output beyond the short user verification code required by Cline's
+browser flow. `/login` stores Cline account credentials through OMP/Pi's normal
+OAuth credential store. Local Cline provider tokens are only read when you
+explicitly set `CLINE_PASS_IMPORT_LOCAL=1`, and they are never modified by this
+extension.

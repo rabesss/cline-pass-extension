@@ -99,6 +99,8 @@ test("runtime catalog skips a corrupt row rather than inventing free pricing", (
 
 test("README lists every registered Cline Pass selector", async () => {
   const readme = await fs.readFile(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(readme, /app\.cline\.bot\/settings\/api-keys/);
+  assert.match(readme, /device-authorization flow/);
   for (const model of CLINE_PASS_MODELS) {
     assert.match(readme, new RegExp(`^${model.wireId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   }
@@ -229,23 +231,77 @@ test("readClinePassAccessToken leaves providers.json symlinks untouched on expir
   assert.equal(await fs.readFile(target, "utf8"), before);
 });
 
-test("OMP OAuth adapter can still prompt for a Cline API key", async () => {
+test("OMP OAuth adapter uses Cline's device authorization flow", async () => {
+  const requests = [];
+  let authInfo;
+  let pollCount = 0;
+  let progressCount = 0;
+  const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
   const credentials = await withProcessEnv({
     CLINE_PASS_API_KEY: "",
     CLINE_API_KEY: "",
     CLINE_PASS_IMPORT_LOCAL: "",
+    CLINE_PASS_API_BASE: "",
+    CLINE_API_BASE_URL: "",
   }, () =>
     loginClinePass({
       onAuth: async info => {
-        assert.match(info.url, /api-keys/);
+        authInfo = info;
       },
-      onPrompt: async () => "  'api-key-1'  ",
+      onPrompt: async () => {
+        throw new Error("device auth must not prompt for an API key");
+      },
+      fetch: async (url, init) => {
+        requests.push({ url, init });
+        if (url === "https://api.workos.com/user_management/authorize/device") {
+          return jsonResponse({
+            device_code: "device-code-1",
+            user_code: "USER-CODE",
+            verification_uri: "https://auth.cline.test/device",
+            verification_uri_complete: "https://auth.cline.test/device?user_code=USER-CODE",
+            expires_in: 300,
+            interval: 0.001,
+          });
+        }
+        if (url === "https://api.workos.com/user_management/authenticate") {
+          pollCount += 1;
+          if (pollCount === 1) return jsonResponse({ error: "authorization_pending" }, { status: 400 });
+          return jsonResponse({ access_token: "workos-access", refresh_token: "workos-refresh" });
+        }
+        if (url === "https://api.cline.bot/api/v1/auth/register") {
+          return jsonResponse({
+            success: true,
+            data: {
+              accessToken: "cline-access",
+              refreshToken: "cline-refresh",
+              tokenType: "Bearer",
+              expiresAt,
+              userInfo: { clineUserId: "user-1", email: "user@example.com" },
+            },
+          });
+        }
+        throw new Error(`unexpected URL: ${url}`);
+      },
+      onProgress: async () => {
+        progressCount += 1;
+      },
     }),
   );
 
-  assert.equal(credentials.access, "api-key-1");
-  assert.equal(credentials.refresh, "api-key-1");
-  assert.equal(getClinePassApiKey(credentials), "api-key-1");
+  assert.deepEqual(authInfo, {
+    url: "https://auth.cline.test/device?user_code=USER-CODE",
+    instructions: "Enter this code in your browser: USER-CODE",
+  });
+  assert.equal(new URLSearchParams(requests[0].init.body).get("client_id"), "client_01K3A541FN8TA3EPPHTD2325AR");
+  assert.equal(new URLSearchParams(requests[1].init.body).get("grant_type"), "urn:ietf:params:oauth:grant-type:device_code");
+  assert.equal(progressCount, 1);
+  assert.deepEqual(JSON.parse(requests[3].init.body), { accessToken: "workos-access", refreshToken: "workos-refresh" });
+  assert.equal(credentials.access, "workos:cline-access");
+  assert.equal(credentials.refresh, "cline-refresh");
+  assert.equal(credentials.expires, Date.parse(expiresAt));
+  assert.equal(credentials.accountId, "user-1");
+  assert.equal(credentials.email, "user@example.com");
+  assert.equal(getClinePassApiKey(credentials), "workos:cline-access");
 });
 
 test("OMP OAuth adapter can import local Cline credentials when opted in", async () => {
@@ -260,15 +316,67 @@ test("OMP OAuth adapter can import local Cline credentials when opted in", async
   assert.equal(getClinePassApiKey(credentials), "workos:token-1");
 });
 
-test("OMP OAuth adapter refresh is a no-op only for API-key credentials", async () => {
+test("OMP OAuth adapter refreshes account credentials and preserves API keys", async () => {
   const refreshed = await refreshClinePassCredentials({ access: "api-key-1", refresh: "api-key-1", expires: Date.now() - 60_000 });
 
   assert.equal(refreshed.access, "api-key-1");
   assert.equal(refreshed.refresh, "api-key-1");
 
+  const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+  let request;
+  const account = await refreshClinePassCredentials(
+    { access: "workos:old-token", refresh: "refresh-token", expires: Date.now() - 60_000, accountId: "user-1" },
+    {
+      fetchImpl: async (url, init) => {
+        request = { url, init };
+        return jsonResponse({
+          success: true,
+          data: {
+            accessToken: "new-token",
+            refreshToken: "new-refresh-token",
+            expiresAt,
+            userInfo: { clineUserId: "user-1", email: "user@example.com" },
+          },
+        });
+      },
+    },
+  );
+
+  assert.equal(request.url, "https://api.cline.bot/api/v1/auth/refresh");
+  assert.deepEqual(JSON.parse(request.init.body), { refreshToken: "refresh-token", grantType: "refresh_token" });
+  assert.equal(account.access, "workos:new-token");
+  assert.equal(account.refresh, "new-refresh-token");
+  assert.equal(account.expires, Date.parse(expiresAt));
+  assert.equal(account.accountId, "user-1");
+});
+
+test("OMP OAuth adapter surfaces Cline refresh error envelopes", async () => {
   await assert.rejects(
-    () => refreshClinePassCredentials({ access: "old-token", refresh: "refresh-token", expires: Date.now() - 60_000 }),
-    /refresh is unsupported/,
+    () => refreshClinePassCredentials(
+      { access: "workos:old-token", refresh: "invalid-refresh-token", expires: Date.now() - 60_000 },
+      { fetchImpl: async () => jsonResponse({ success: false, message: "invalid refresh token" }) },
+    ),
+    /Cline API returned an error envelope: invalid refresh token/,
+  );
+});
+
+test("OMP OAuth adapter combines caller cancellation with its request timeout", async () => {
+  const controller = new AbortController();
+
+  await assert.rejects(
+    () => refreshClinePassCredentials(
+      { access: "workos:old-token", refresh: "refresh-token", expires: Date.now() - 60_000 },
+      {
+        signal: controller.signal,
+        fetchImpl: async (_url, init) => {
+          assert.notEqual(init.signal, controller.signal);
+          controller.abort(new Error("test cancellation"));
+          assert.equal(init.signal.aborted, true);
+          throw init.signal.reason;
+        },
+      },
+    ),
+    /test cancellation/,
   );
 });
 
@@ -277,11 +385,31 @@ test("doctor reports missing and present ClinePass login status", async () => {
   const source = path.join(tempDir, "providers.json");
   await fs.writeFile(source, JSON.stringify(providerSettings("token-1")), "utf8");
 
-  const report = await doctorClinePass({ CLINE_PROVIDERS_JSON: source });
+  const report = await doctorClinePass({
+    CLINE_PROVIDERS_JSON: source,
+    [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: path.join(tempDir, "missing-agent.db"),
+  });
 
   assert.equal(report.ok, true);
   assert.equal(report.checks.some(check => check.name === "access token" && check.ok), true);
   assert.equal(JSON.stringify(report).includes("token-1"), false);
+});
+
+test("doctor reports saved OMP /login credentials without exposing them", async () => {
+  if (!hasSqlite3()) return;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
+  const dbPath = await createOmpAuthDb(tempDir, {
+    access: "workos:saved-token",
+    refresh: "saved-refresh-token",
+    expires: Date.now() + 3_600_000,
+  });
+
+  const report = await doctorClinePass({ [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: dbPath });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.checks.some(check => check.name === "OMP /login" && check.ok), true);
+  assert.equal(report.checks.some(check => check.name === "expiry" && check.detail === "present"), true);
+  assert.doesNotMatch(JSON.stringify(report), /saved-token|saved-refresh-token/);
 });
 
 test("doctor rejects expired access tokens even when a refresh token is available", async () => {
@@ -289,7 +417,10 @@ test("doctor rejects expired access tokens even when a refresh token is availabl
   const source = path.join(tempDir, "providers.json");
   await fs.writeFile(source, JSON.stringify(providerSettings("token-1", Date.now() - 60_000)), "utf8");
 
-  const report = await doctorClinePass({ CLINE_PROVIDERS_JSON: source });
+  const report = await doctorClinePass({
+    CLINE_PROVIDERS_JSON: source,
+    [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: path.join(tempDir, "missing-agent.db"),
+  });
 
   assert.equal(report.ok, false);
   assert.equal(report.checks.some(check => check.name === "expiry" && !check.ok && check.detail === "expired"), true);
@@ -1155,7 +1286,10 @@ test("runClinePassCommand preserves json output preference", async () => {
   const source = path.join(tempDir, "providers.json");
   await fs.writeFile(source, JSON.stringify(providerSettings("token-1")), "utf8");
 
-  const report = await runClinePassCommand("doctor --json", { CLINE_PROVIDERS_JSON: source });
+  const report = await runClinePassCommand("doctor --json", {
+    CLINE_PROVIDERS_JSON: source,
+    [CLINE_PASS_OMP_AGENT_DB_ENV_VAR]: path.join(tempDir, "missing-agent.db"),
+  });
 
   assert.equal(report.command, "doctor");
   assert.equal(report.json, true);

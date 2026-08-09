@@ -2,8 +2,19 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CLINE_ACCOUNT_PROVIDER_ID, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR, CLINE_PASS_API_KEY_ENV_VAR, CLINE_PASS_OMP_AGENT_DB_ENV_VAR, CLINE_WORKOS_ACCESS_TOKEN_PREFIX, DEFAULT_SOURCE_PATH, PROVIDER_ID, TEN_YEARS_MS, } from "./constants.js";
-import { expandHome, expiryTimeMs, isExpired, safeError, stringValue, } from "./utils.js";
+import { CLINE_API_BASE, CLINE_ACCOUNT_PROVIDER_ID, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR, CLINE_PASS_API_KEY_ENV_VAR, CLINE_PASS_OMP_AGENT_DB_ENV_VAR, CLINE_WORKOS_ACCESS_TOKEN_PREFIX, DEFAULT_SOURCE_PATH, PROVIDER_ID, TEN_YEARS_MS, } from "./constants.js";
+import { unwrapClineResponsePayload } from "./responses.js";
+import { expandHome, expiryTimeMs, isExpired, safeError, sanitizeErrorDetail, stringValue, } from "./utils.js";
+const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
+const WORKOS_API_BASE = "https://api.workos.com";
+const WORKOS_DEVICE_AUTH_PATH = "/user_management/authorize/device";
+const WORKOS_AUTHENTICATE_PATH = "/user_management/authenticate";
+const CLINE_REGISTER_PATH = "/auth/register";
+const CLINE_REFRESH_PATH = "/auth/refresh";
+const DEVICE_AUTH_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+const DEFAULT_DEVICE_AUTH_EXPIRES_SECONDS = 300;
+const DEFAULT_DEVICE_AUTH_INTERVAL_SECONDS = 5;
+const AUTH_REQUEST_TIMEOUT_MS = 30_000;
 export function resolveProvidersPath(env = process.env) {
     if (env.CLINE_PROVIDERS_JSON)
         return path.resolve(expandHome(env.CLINE_PROVIDERS_JSON, env));
@@ -41,27 +52,171 @@ export async function loginClinePass(callbacks = {}) {
     if (process.env.CLINE_PASS_IMPORT_LOCAL === "1") {
         return readClinePassCredentials();
     }
-    await callbacks.onAuth?.({
-        url: "https://app.cline.bot/settings/api-keys",
-        instructions: "Create a Cline API key, then paste it into the prompt.",
+    const fetchImpl = callbacks.fetch ?? globalThis.fetch;
+    if (typeof fetchImpl !== "function")
+        throw new Error("Cline Pass login requires global fetch (Node 18+).");
+    if (typeof callbacks.onAuth !== "function")
+        throw new Error("Cline Pass login requires an interactive /login host.");
+    const authorization = await requestDeviceAuthorization(fetchImpl, callbacks.signal);
+    await callbacks.onAuth({
+        url: authorization.verificationUriComplete ?? authorization.verificationUri,
+        instructions: `Enter this code in your browser: ${authorization.userCode}`,
     });
-    if (typeof callbacks.onPrompt !== "function") {
-        throw new Error("Run /login in OMP and paste a Cline API key, or set CLINE_PASS_API_KEY.");
-    }
-    const apiKey = sanitizeCredentialInput(await callbacks.onPrompt({ message: "Paste a Cline API key for Cline Pass, or leave blank to cancel:" }));
-    if (!apiKey)
-        throw new Error("No Cline API key provided.");
-    return credentialsFromApiKey(apiKey);
+    const workOsTokens = await pollDeviceAuthorization(fetchImpl, authorization, callbacks);
+    return registerClineCredentials(fetchImpl, workOsTokens, resolveClineAuthBase(process.env), callbacks.signal);
 }
-export async function refreshClinePassCredentials(credentials, _options = {}) {
+export async function refreshClinePassCredentials(credentials, options = {}) {
     const access = stringValue(credentials?.access);
     const refresh = stringValue(credentials?.refresh);
     if (access && refresh === access)
         return credentialsFromApiKey(access);
-    throw new Error("Cline Pass credential refresh is unsupported. Use a Cline API key or refresh the Cline app session.");
+    if (!refresh)
+        throw new Error("Cline Pass refresh token is missing. Run /login again.");
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    if (typeof fetchImpl !== "function")
+        throw new Error("Cline Pass token refresh requires global fetch (Node 18+).");
+    const response = await fetchImpl(`${resolveClineAuthBase(process.env, options.baseUrl)}${CLINE_REFRESH_PATH}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: refresh, grantType: "refresh_token" }),
+        signal: requestSignal(options.signal),
+    });
+    const payload = await responseJson(response);
+    if (!response.ok)
+        throw new Error(`Cline Pass token refresh failed: HTTP ${response.status}${apiErrorSuffix(payload)}`);
+    return credentialsFromClineAuthResponse(payload, credentials);
 }
 export function getClinePassApiKey(credentials) {
-    return stringValue(credentials?.access);
+    const access = stringValue(credentials?.access);
+    const refresh = stringValue(credentials?.refresh);
+    return access && refresh && refresh !== access ? formatClineAccountAccessToken(access) : access;
+}
+async function requestDeviceAuthorization(fetchImpl, signal) {
+    const response = await fetchImpl(`${WORKOS_API_BASE}${WORKOS_DEVICE_AUTH_PATH}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: CLINE_WORKOS_CLIENT_ID }).toString(),
+        signal: requestSignal(signal),
+    });
+    const payload = await responseJson(response);
+    if (!response.ok)
+        throw new Error(`Cline device authorization failed: HTTP ${response.status}${apiErrorSuffix(payload)}`);
+    const deviceCode = stringValue(payload.device_code);
+    const userCode = stringValue(payload.user_code);
+    const verificationUri = stringValue(payload.verification_uri);
+    if (!deviceCode || !userCode || !verificationUri)
+        throw new Error("Cline returned an invalid device authorization response.");
+    const verificationUriComplete = stringValue(payload.verification_uri_complete) || undefined;
+    return {
+        deviceCode,
+        userCode,
+        verificationUri,
+        ...(verificationUriComplete ? { verificationUriComplete } : {}),
+        expiresInSeconds: positiveSeconds(payload.expires_in, DEFAULT_DEVICE_AUTH_EXPIRES_SECONDS),
+        pollIntervalSeconds: positiveSeconds(payload.interval, DEFAULT_DEVICE_AUTH_INTERVAL_SECONDS),
+    };
+}
+async function pollDeviceAuthorization(fetchImpl, authorization, callbacks) {
+    const deadline = Date.now() + authorization.expiresInSeconds * 1000;
+    let intervalSeconds = authorization.pollIntervalSeconds;
+    while (Date.now() <= deadline) {
+        const response = await fetchImpl(`${WORKOS_API_BASE}${WORKOS_AUTHENTICATE_PATH}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+                grant_type: DEVICE_AUTH_GRANT,
+                device_code: authorization.deviceCode,
+                client_id: CLINE_WORKOS_CLIENT_ID,
+            }).toString(),
+            signal: requestSignal(callbacks.signal),
+        });
+        const payload = await responseJson(response);
+        if (response.ok) {
+            const accessToken = stringValue(payload.access_token);
+            const refreshToken = stringValue(payload.refresh_token);
+            if (!accessToken || !refreshToken)
+                throw new Error("Cline returned an invalid device token response.");
+            return { accessToken, refreshToken };
+        }
+        const error = stringValue(payload.error);
+        if (error === "authorization_pending" || error === "slow_down") {
+            if (error === "slow_down")
+                intervalSeconds += 5;
+            await callbacks.onProgress?.("Waiting for browser authentication confirmation...");
+            await wait(intervalSeconds * 1000, callbacks.signal);
+            continue;
+        }
+        throw new Error(`Cline device authentication failed: HTTP ${response.status}${apiErrorSuffix(payload)}`);
+    }
+    throw new Error("Cline device authorization timed out. Run /login again.");
+}
+async function registerClineCredentials(fetchImpl, tokens, authBase, signal) {
+    const response = await fetchImpl(`${authBase}${CLINE_REGISTER_PATH}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }),
+        signal: requestSignal(signal),
+    });
+    const payload = await responseJson(response);
+    if (!response.ok)
+        throw new Error(`Cline account registration failed: HTTP ${response.status}${apiErrorSuffix(payload)}`);
+    return credentialsFromClineAuthResponse(payload);
+}
+function credentialsFromClineAuthResponse(payload, fallback = {}) {
+    const data = unwrapClineResponsePayload(payload);
+    const access = stringValue(data.accessToken);
+    const refresh = stringValue(data.refreshToken) || stringValue(fallback.refresh);
+    const expires = expiryTimeMs(data.expiresAt);
+    if (!access || !refresh || expires === undefined)
+        throw new Error("Cline returned an invalid authentication response.");
+    const userInfo = data?.userInfo && typeof data.userInfo === "object" ? data.userInfo : undefined;
+    const accountId = stringValue(userInfo?.clineUserId) || stringValue(fallback.accountId) || undefined;
+    const email = stringValue(userInfo?.email) || stringValue(fallback.email) || undefined;
+    return {
+        access: formatClineAccountAccessToken(access),
+        refresh,
+        expires,
+        ...(accountId ? { accountId } : {}),
+        ...(email ? { email } : {}),
+    };
+}
+function resolveClineAuthBase(env, override) {
+    const configured = stringValue(override) || stringValue(env.CLINE_PASS_API_BASE) || stringValue(env.CLINE_API_BASE_URL) || CLINE_API_BASE;
+    const base = configured.replace(/\/+$/, "");
+    return /\/api\/v1$/i.test(base) ? base : `${base}/api/v1`;
+}
+function requestSignal(signal) {
+    const timeout = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+async function responseJson(response) {
+    const payload = await response.json().catch(() => ({}));
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+}
+function apiErrorSuffix(payload) {
+    const detail = stringValue(payload.error_description) || stringValue(payload.message) || stringValue(payload.error);
+    return detail ? ` - ${sanitizeErrorDetail(detail)}` : "";
+}
+function positiveSeconds(value, fallback) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+async function wait(ms, signal) {
+    await new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(signal.reason ?? new Error("Cline device authentication was cancelled."));
+            return;
+        }
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal?.reason ?? new Error("Cline device authentication was cancelled."));
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
+    });
 }
 export async function readProviderSettings(providersPath) {
     let data;
@@ -148,12 +303,12 @@ export async function resolveRuntimeApiKey(options = {}, env = process.env) {
     if (stored) {
         if (!isExpired(stored.expires, 60_000))
             return stored.access;
-        throw new Error("Saved Cline Pass credential is expired. Run /login with a Cline API key or set CLINE_PASS_API_KEY.");
+        throw new Error("Saved Cline Pass credential is expired. Run /login again or set CLINE_PASS_API_KEY.");
     }
     return "";
 }
 export function missingApiKeyMessage() {
-    return "No Cline Pass credential. Run /login and paste a Cline API key, set CLINE_PASS_API_KEY, or set CLINE_PASS_IMPORT_LOCAL=1 to read an existing local Cline app token.";
+    return "No Cline Pass credential. Run /login for browser sign-in, set CLINE_PASS_API_KEY, or set CLINE_PASS_IMPORT_LOCAL=1 to read an existing local Cline app token.";
 }
 function isEnvVarReference(value) {
     return [CLINE_PASS_API_KEY_ENV_VAR, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR].some(key => value === key || value === `$${key}` || value === `\${${key}}`);
@@ -176,7 +331,7 @@ function accessTokenFromRuntimeOption(value) {
         return key;
     return credentialsFromStoredOAuthData(record)?.access || "";
 }
-async function readOmpSavedClinePassCredentials(env = process.env) {
+export async function readOmpSavedClinePassCredentials(env = process.env) {
     for (const dbPath of resolveOmpAgentDbPathCandidates(env)) {
         if (!(await fileExists(dbPath)))
             continue;
@@ -312,16 +467,6 @@ function credentialsFromApiKey(apiKey) {
         refresh: apiKey,
         expires: Date.now() + TEN_YEARS_MS,
     };
-}
-function sanitizeCredentialInput(input) {
-    const cleaned = Array.from(String(input || ""))
-        .filter(char => {
-        const code = char.charCodeAt(0);
-        return code > 31 && code !== 127;
-    })
-        .join("")
-        .trim();
-    return cleaned.replace(/^['"`]+|['"`]+$/g, "").trim();
 }
 function formatClineAccountAccessToken(token) {
     const value = stringValue(token);

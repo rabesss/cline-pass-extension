@@ -1,5 +1,5 @@
 import { CLINE_API_BASE, DEFAULT_MODEL } from "./constants.js";
-import { findClineAuthProviderEntry, missingApiKeyMessage, readProviderSettings, resolveProvidersPath, resolveRuntimeApiKey, } from "./auth.js";
+import { findClineAuthProviderEntry, missingApiKeyMessage, readOmpSavedClinePassCredentials, readProviderSettings, resolveProvidersPath, resolveRuntimeApiKey, } from "./auth.js";
 import { CLINE_PASS_MODELS, toWireModelId } from "./models.js";
 import { unwrapClineResponsePayload } from "./responses.js";
 import { camelCase, describeExpiry, normalizeBaseUrl, parseBoolean, safeError, stringValue, tokenize } from "./utils.js";
@@ -15,6 +15,16 @@ export async function doctorClinePass(env = process.env) {
     if (envToken) {
         checks.push({ name: "access token", ok: true, detail: "CLINE_PASS_ACCESS_TOKEN is set" });
         return { ok: true, command: "doctor", providersPath, checks };
+    }
+    const saved = env.CLINE_PASS_IMPORT_LOCAL === "1"
+        ? undefined
+        : await readOmpSavedClinePassCredentials(env).catch(() => undefined);
+    if (saved) {
+        checks.push({ name: "OMP /login", ok: true, detail: "saved Cline Pass credential found" });
+        const expiry = describeExpiry(saved.expires);
+        if (expiry)
+            checks.push({ name: "expiry", ok: !expiry.expired, detail: expiry.detail });
+        return { ok: checks.every(check => check.ok), command: "doctor", providersPath, checks };
     }
     let settings;
     try {
@@ -111,7 +121,7 @@ export async function verifyClinePass(options = {}, env = process.env) {
             command: "verify",
             status: response.status,
             detail: response.status === 401
-                ? "Cline API returned HTTP 401. Run /login and paste a Cline API key, refresh the Cline app session, or set CLINE_PASS_API_KEY."
+                ? "Cline API returned HTTP 401. Run /login again, refresh an imported Cline app session, or set CLINE_PASS_API_KEY."
                 : `Cline API returned HTTP ${response.status}`,
             model,
             baseUrl,
