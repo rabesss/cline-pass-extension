@@ -29,16 +29,15 @@ export interface Cost {
     cacheRead: number;
     cacheWrite: number;
 }
-export interface ReferenceRates {
-    input: number;
-    output: number;
-    cacheRead: number | null;
-    cacheWrite: number | null;
-}
 export interface ReferencePricingTier {
     context: string | null;
     maxContextTokens?: number;
-    rates: ReferenceRates;
+    rates: {
+        input: number;
+        output: number;
+        cacheRead: number | null;
+        cacheWrite: number | null;
+    };
 }
 export interface ClinePassModel {
     id: string;

@@ -52,7 +52,7 @@ test("committed catalog registers the current 12-model Cline Pass set", () => {
 
   const glm = CLINE_PASS_MODELS.find(model => model.id === "glm-5.2");
   assert.equal(glm.contextWindow, 1_048_576);
-  assert.equal(glm.maxTokens, 128_000);
+  assert.equal(glm.maxTokens, 131_072);
   assert.deepEqual(glm.cost, { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 });
   assert.equal(glm.cacheReadSupported, true);
   assert.equal(glm.cacheWriteSupported, false);
@@ -675,24 +675,20 @@ test("createStreamClinePass keeps a conservative default request cap", async () 
   assert.equal(cappedPayload.max_tokens, 131_072);
 });
 
-test("createStreamClinePass separates cached tokens and applies long-context pricing", async () => {
-  const model = CLINE_PASS_MODELS.find(entry => entry.id === "qwen3.7-plus");
+test("createStreamClinePass separates cached tokens and applies tier and fallback pricing", async () => {
+  const model = structuredClone(CLINE_PASS_MODELS.find(entry => entry.id === "qwen3.7-plus"));
+  model.pricingTiers[1].rates.cacheWrite = null;
   const stream = createStreamClinePass({
     fetchImpl: async () => sseResponse([{
       choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
       usage: {
-        prompt_tokens: 300_000,
+        prompt_tokens: 256_001,
         completion_tokens: 20_000,
-        total_tokens: 320_000,
+        total_tokens: 276_001,
         prompt_tokens_details: { cached_tokens: 30_000, cache_write_tokens: 10_000 },
       },
     }]),
-  })(
-    model,
-    { messages: [{ role: "user", content: "hi" }] },
-    { apiKey: "api-key-1" },
-  );
-
+  })(model, { messages: [{ role: "user", content: "hi" }] }, { apiKey: "api-key-1" });
   const events = [];
   for await (const event of stream) events.push(event);
   const usage = events.at(-1).message.usage;
@@ -703,12 +699,12 @@ test("createStreamClinePass separates cached tokens and applies long-context pri
     cacheWrite: usage.cacheWrite,
     output: usage.output,
     totalTokens: usage.totalTokens,
-  }, { input: 260_000, cacheRead: 30_000, cacheWrite: 10_000, output: 20_000, totalTokens: 320_000 });
-  assert.ok(Math.abs(usage.cost.input - 0.312) < 1e-12);
+  }, { input: 216_001, cacheRead: 30_000, cacheWrite: 10_000, output: 20_000, totalTokens: 276_001 });
+  assert.ok(Math.abs(usage.cost.input - 0.2592012) < 1e-12);
   assert.ok(Math.abs(usage.cost.cacheRead - 0.0036) < 1e-12);
-  assert.ok(Math.abs(usage.cost.cacheWrite - 0.015) < 1e-12);
+  assert.ok(Math.abs(usage.cost.cacheWrite - 0.012) < 1e-12);
   assert.ok(Math.abs(usage.cost.output - 0.096) < 1e-12);
-  assert.ok(Math.abs(usage.cost.total - 0.4266) < 1e-12);
+  assert.ok(Math.abs(usage.cost.total - 0.3708012) < 1e-12);
 });
 
 test("createStreamClinePass emits streamed reasoning as thinking blocks", async () => {

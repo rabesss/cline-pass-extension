@@ -107,7 +107,7 @@ function contextCeiling(context, label) {
   if (!context || !/^(?:≤|<=)/.test(context)) return undefined;
   const match = context.match(/^(?:≤|<=)\s*(\d+(?:\.\d+)?)\s*([KMG])?\s*tokens$/i);
   assertExtraction(match, `${label} has an unsupported context tier`);
-  const scale = { K: 1024, M: 1024 ** 2, G: 1024 ** 3 }[match[2]?.toUpperCase()] ?? 1;
+  const scale = { K: 1_000, M: 1_000_000, G: 1_000_000_000 }[match[2]?.toUpperCase()] ?? 1;
   return Math.round(Number(match[1]) * scale);
 }
 
@@ -317,18 +317,20 @@ export function validateCommittedCatalog(catalog) {
     assertExtraction(finitePositive(model.contextWindow), `${label}.contextWindow must be positive`);
     assertExtraction(finitePositive(model.maxTokens), `${label}.maxTokens must be positive`);
     assertExtraction(Array.isArray(model.pricingTiers) && model.pricingTiers.length > 0, `${label}.pricingTiers must not be empty`);
+    let previousCeiling = 0;
     for (const [tierIndex, tier] of model.pricingTiers.entries()) {
       assertExtraction(isPlainObject(tier), `${label}.pricingTiers[${tierIndex}] must be an object`);
       normalizeRates(tier.rates, `${label}.pricingTiers[${tierIndex}].rates`);
-      assertExtraction(
-        tier.maxContextTokens === undefined || finitePositive(tier.maxContextTokens),
-        `${label}.pricingTiers[${tierIndex}].maxContextTokens must be positive`,
-      );
+      if (tierIndex === model.pricingTiers.length - 1) {
+        assertExtraction(tier.maxContextTokens === undefined, `${label}.pricingTiers must end with an unbounded tier`);
+      } else {
+        assertExtraction(
+          finitePositive(tier.maxContextTokens) && tier.maxContextTokens > previousCeiling,
+          `${label}.pricingTiers[${tierIndex}].maxContextTokens must be positive and ordered`,
+        );
+        previousCeiling = tier.maxContextTokens;
+      }
     }
-    assertExtraction(
-      model.pricingTiers.length === 1 || model.pricingTiers.at(-1).maxContextTokens === undefined,
-      `${label}.pricingTiers must end with an unbounded tier`,
-    );
     assertExtraction(
       model.pricingSource === "cline-docs" || model.pricingSource === "models.dev-fallback",
       `${label}.pricingSource is invalid`,

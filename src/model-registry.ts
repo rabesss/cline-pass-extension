@@ -6,7 +6,6 @@ import type {
   ClinePassModel,
   ReasoningLevel,
   ReferencePricingTier,
-  ReferenceRates,
   SourceReasoningOption,
 } from "./types.js";
 
@@ -58,13 +57,25 @@ function finiteNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function validRates(value: unknown): value is ReferenceRates {
+function validRates(value: unknown): value is ReferencePricingTier["rates"] {
   if (!value || typeof value !== "object") return false;
-  const rates = value as Partial<ReferenceRates>;
+  const rates = value as Partial<ReferencePricingTier["rates"]>;
   return finiteNonNegative(rates.input) &&
     finiteNonNegative(rates.output) &&
     (rates.cacheRead === null || finiteNonNegative(rates.cacheRead)) &&
     (rates.cacheWrite === null || finiteNonNegative(rates.cacheWrite));
+}
+
+function validPricingTiers(value: unknown): value is ReferencePricingTier[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  let previousCeiling = 0;
+  return value.every((tier, index) => {
+    if (!validRates(tier?.rates)) return false;
+    if (index === value.length - 1) return tier.maxContextTokens === undefined;
+    if (!finitePositive(tier.maxContextTokens) || tier.maxContextTokens <= previousCeiling) return false;
+    previousCeiling = tier.maxContextTokens;
+    return true;
+  });
 }
 
 function thinkingLevelMap(efforts: readonly string[]): Record<ReasoningLevel, string | null> {
@@ -104,7 +115,7 @@ export function buildRuntimeCatalog(catalog: ModelsCatalog = CLINE_PASS_CATALOG)
     ids.add(id);
 
     const pricingTiers = model.pricingTiers;
-    if (!Array.isArray(pricingTiers) || pricingTiers.length === 0 || pricingTiers.some(tier => !validRates(tier?.rates))) {
+    if (!validPricingTiers(pricingTiers)) {
       issues.push(`invalid reference pricing for ${id}`);
       continue;
     }

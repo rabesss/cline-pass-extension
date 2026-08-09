@@ -28,6 +28,21 @@ function validRates(value) {
         (rates.cacheRead === null || finiteNonNegative(rates.cacheRead)) &&
         (rates.cacheWrite === null || finiteNonNegative(rates.cacheWrite));
 }
+function validPricingTiers(value) {
+    if (!Array.isArray(value) || value.length === 0)
+        return false;
+    let previousCeiling = 0;
+    return value.every((tier, index) => {
+        if (!validRates(tier?.rates))
+            return false;
+        if (index === value.length - 1)
+            return tier.maxContextTokens === undefined;
+        if (!finitePositive(tier.maxContextTokens) || tier.maxContextTokens <= previousCeiling)
+            return false;
+        previousCeiling = tier.maxContextTokens;
+        return true;
+    });
+}
 function thinkingLevelMap(efforts) {
     const advertised = new Set(efforts);
     return Object.fromEntries(OMP_REASONING_LEVELS.map(level => {
@@ -60,7 +75,7 @@ export function buildRuntimeCatalog(catalog = CLINE_PASS_CATALOG) {
         }
         ids.add(id);
         const pricingTiers = model.pricingTiers;
-        if (!Array.isArray(pricingTiers) || pricingTiers.length === 0 || pricingTiers.some(tier => !validRates(tier?.rates))) {
+        if (!validPricingTiers(pricingTiers)) {
             issues.push(`invalid reference pricing for ${id}`);
             continue;
         }

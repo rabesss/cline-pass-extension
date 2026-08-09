@@ -494,7 +494,7 @@ function applyUsage(usage, source, model = {}) {
     usage.totalTokens = Math.max(0, numberValue(source?.total_tokens)) || usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
     const tierRates = model.pricingTiers?.find(tier => tier.maxContextTokens === undefined || promptTokens <= tier.maxContextTokens)?.rates;
     const rates = tierRates
-        ? { ...tierRates, cacheRead: tierRates.cacheRead ?? 0, cacheWrite: tierRates.cacheWrite ?? 0 }
+        ? { ...tierRates, cacheRead: tierRates.cacheRead ?? tierRates.input, cacheWrite: tierRates.cacheWrite ?? tierRates.input }
         : model.cost;
     if (!rates)
         return;

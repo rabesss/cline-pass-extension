@@ -176,6 +176,10 @@ test("committed validation rejects count, pricing, and selector corruption", () 
   const duplicate = structuredClone(catalog);
   duplicate.models[1].wireId = duplicate.models[0].wireId;
   assert.throws(() => validateCommittedCatalog(duplicate), /duplicate committed model id/);
+
+  const unorderedTiers = structuredClone(catalog);
+  unorderedTiers.models.at(-1).pricingTiers[0].maxContextTokens = undefined;
+  assert.throws(() => validateCommittedCatalog(unorderedTiers), /positive and ordered/);
 });
 
 test("source fetching retries bounded transient failures and rejects redirects", async () => {

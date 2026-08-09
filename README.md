@@ -159,7 +159,9 @@ reference quota values, not an additional pay-as-you-go bill. OMP/Pi accepts one
 flat model-metadata rate per token dimension, so it displays the first documented
 tier. The adapter's usage accounting selects the matching context tier; all tiers
 remain preserved in `models.json`. A missing cache rate is stored as unsupported
-rather than treated as a source price of zero.
+rather than treated as a source price of zero. If upstream nevertheless reports
+tokens for that cache dimension, reference accounting charges them at the normal
+input rate.
 
 At the current snapshot, Qwen3.8 Max is live but absent from Cline's pricing
 table, so its row explicitly uses the matching models.dev rate as a fallback.

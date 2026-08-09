@@ -112,7 +112,7 @@
       ],
       "pricingSource": "cline-docs",
       "contextWindow": 1048576,
-      "maxTokens": 128000
+      "maxTokens": 131072
     },
     {
       "wireId": "cline-pass/kimi-k2.7-code",
@@ -219,7 +219,7 @@
       ],
       "sourceModalities": ["text", "image"],
       "pricingTiers": [
-        { "context": "≤ 256K tokens", "maxContextTokens": 262144, "rates": { "input": 0.4, "output": 1.6, "cacheRead": 0.04, "cacheWrite": 0.5 } },
+        { "context": "≤ 256K tokens", "maxContextTokens": 256000, "rates": { "input": 0.4, "output": 1.6, "cacheRead": 0.04, "cacheWrite": 0.5 } },
         { "context": "> 256K tokens", "rates": { "input": 1.2, "output": 4.8, "cacheRead": 0.12, "cacheWrite": 1.5 } }
       ],
       "pricingSource": "cline-docs",
