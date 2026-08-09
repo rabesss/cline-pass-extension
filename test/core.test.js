@@ -234,6 +234,8 @@ test("readClinePassAccessToken leaves providers.json symlinks untouched on expir
 test("OMP OAuth adapter uses Cline's device authorization flow", async () => {
   const requests = [];
   let authInfo;
+  let pollCount = 0;
+  let progressCount = 0;
   const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
   const credentials = await withProcessEnv({
     CLINE_PASS_API_KEY: "",
@@ -258,10 +260,12 @@ test("OMP OAuth adapter uses Cline's device authorization flow", async () => {
             verification_uri: "https://auth.cline.test/device",
             verification_uri_complete: "https://auth.cline.test/device?user_code=USER-CODE",
             expires_in: 300,
-            interval: 5,
+            interval: 0.001,
           });
         }
         if (url === "https://api.workos.com/user_management/authenticate") {
+          pollCount += 1;
+          if (pollCount === 1) return jsonResponse({ error: "authorization_pending" }, { status: 400 });
           return jsonResponse({ access_token: "workos-access", refresh_token: "workos-refresh" });
         }
         if (url === "https://api.cline.bot/api/v1/auth/register") {
@@ -278,6 +282,9 @@ test("OMP OAuth adapter uses Cline's device authorization flow", async () => {
         }
         throw new Error(`unexpected URL: ${url}`);
       },
+      onProgress: async () => {
+        progressCount += 1;
+      },
     }),
   );
 
@@ -287,7 +294,8 @@ test("OMP OAuth adapter uses Cline's device authorization flow", async () => {
   });
   assert.equal(new URLSearchParams(requests[0].init.body).get("client_id"), "client_01K3A541FN8TA3EPPHTD2325AR");
   assert.equal(new URLSearchParams(requests[1].init.body).get("grant_type"), "urn:ietf:params:oauth:grant-type:device_code");
-  assert.deepEqual(JSON.parse(requests[2].init.body), { accessToken: "workos-access", refreshToken: "workos-refresh" });
+  assert.equal(progressCount, 1);
+  assert.deepEqual(JSON.parse(requests[3].init.body), { accessToken: "workos-access", refreshToken: "workos-refresh" });
   assert.equal(credentials.access, "workos:cline-access");
   assert.equal(credentials.refresh, "cline-refresh");
   assert.equal(credentials.expires, Date.parse(expiresAt));
