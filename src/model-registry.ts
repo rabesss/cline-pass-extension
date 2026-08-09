@@ -1,33 +1,24 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 
-import type { ClinePassModel, ReasoningLevel, SourceReasoningOption } from "./types.js";
-
-export interface CatalogRates {
-  input: number;
-  output: number;
-  cacheRead: number | null;
-  cacheWrite: number | null;
-}
-
-export interface CatalogPricingTier {
-  context: string | null;
-  rates: CatalogRates;
-}
+import { PROVIDER_ID } from "./constants.js";
+import type {
+  ClinePassModel,
+  ReasoningLevel,
+  ReferencePricingTier,
+  ReferenceRates,
+  SourceReasoningOption,
+} from "./types.js";
 
 export interface CatalogModel {
-  id: string;
   wireId: string;
   upstreamId: string;
   name: string;
   description: string;
   reasoning: boolean;
   reasoningOptions: SourceReasoningOption[];
-  reasoningEfforts: string[];
-  input: string[];
   sourceModalities: string[];
-  cost: CatalogRates;
-  pricingTiers: CatalogPricingTier[];
+  pricingTiers: ReferencePricingTier[];
   pricingSource: "cline-docs" | "models.dev-fallback";
   contextWindow: number;
   maxTokens: number;
@@ -67,6 +58,15 @@ function finiteNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function validRates(value: unknown): value is ReferenceRates {
+  if (!value || typeof value !== "object") return false;
+  const rates = value as Partial<ReferenceRates>;
+  return finiteNonNegative(rates.input) &&
+    finiteNonNegative(rates.output) &&
+    (rates.cacheRead === null || finiteNonNegative(rates.cacheRead)) &&
+    (rates.cacheWrite === null || finiteNonNegative(rates.cacheWrite));
+}
+
 function thinkingLevelMap(efforts: readonly string[]): Record<ReasoningLevel, string | null> {
   const advertised = new Set(efforts);
   return Object.fromEntries(
@@ -88,52 +88,51 @@ function ompReasoningEfforts(efforts: readonly string[]): ReasoningLevel[] {
 export function buildRuntimeCatalog(catalog: ModelsCatalog = CLINE_PASS_CATALOG): RuntimeCatalogResult {
   const issues: string[] = [];
   const ids = new Set<string>();
-  const wireIds = new Set<string>();
   const models: ClinePassModel[] = [];
+  const wirePrefix = `${PROVIDER_ID}/`;
 
   for (const model of catalog.models ?? []) {
-    if (!model || typeof model !== "object" || !model.id || !model.wireId) {
-      issues.push("catalog row is missing id or wireId");
+    if (!model || typeof model !== "object" || !model.wireId?.startsWith(wirePrefix)) {
+      issues.push("catalog row has an invalid wireId");
       continue;
     }
-    if (ids.has(model.id) || wireIds.has(model.wireId)) {
-      issues.push(`duplicate model selector ${model.id}`);
+    const id = model.wireId.slice(wirePrefix.length);
+    if (!id || ids.has(id)) {
+      issues.push(`duplicate or empty model selector ${id}`);
       continue;
     }
-    ids.add(model.id);
-    wireIds.add(model.wireId);
+    ids.add(id);
 
-    const rates = model.cost;
-    if (
-      !rates ||
-      !finiteNonNegative(rates.input) ||
-      !finiteNonNegative(rates.output) ||
-      !(rates.cacheRead === null || finiteNonNegative(rates.cacheRead)) ||
-      !(rates.cacheWrite === null || finiteNonNegative(rates.cacheWrite))
-    ) {
-      issues.push(`invalid reference pricing for ${model.id}`);
+    const pricingTiers = model.pricingTiers;
+    if (!Array.isArray(pricingTiers) || pricingTiers.length === 0 || pricingTiers.some(tier => !validRates(tier?.rates))) {
+      issues.push(`invalid reference pricing for ${id}`);
       continue;
     }
     if (!finitePositive(model.contextWindow) || !finitePositive(model.maxTokens)) {
-      issues.push(`invalid token limits for ${model.id}`);
+      issues.push(`invalid token limits for ${id}`);
       continue;
     }
 
-    const reasoningEfforts = ompReasoningEfforts(model.reasoningEfforts ?? []);
+    const sourceReasoningOptions = Array.isArray(model.reasoningOptions) ? structuredClone(model.reasoningOptions) : [];
+    const sourceModalities = Array.isArray(model.sourceModalities) ? [...model.sourceModalities] : ["text"];
+    const reasoningEfforts = ompReasoningEfforts(
+      sourceReasoningOptions.find(option => option.type === "effort")?.values ?? [],
+    );
+    const rates = pricingTiers[0]!.rates;
     models.push({
-      id: model.id,
+      id,
       wireId: model.wireId,
       name: model.name,
       description: model.description,
       reasoning: model.reasoning === true && reasoningEfforts.length > 0,
       sourceReasoning: model.reasoning === true,
-      sourceReasoningOptions: Array.isArray(model.reasoningOptions) ? structuredClone(model.reasoningOptions) : [],
-      thinkingLevelMap: thinkingLevelMap(model.reasoningEfforts ?? []),
+      sourceReasoningOptions,
+      thinkingLevelMap: thinkingLevelMap(reasoningEfforts),
       ...(reasoningEfforts.length > 0
         ? { thinking: { mode: "effort" as const, efforts: reasoningEfforts } }
         : {}),
-      input: Array.isArray(model.input) ? model.input.filter(value => value === "text" || value === "image") : ["text"],
-      sourceModalities: Array.isArray(model.sourceModalities) ? [...model.sourceModalities] : ["text"],
+      input: sourceModalities.filter(value => value === "text" || value === "image"),
+      sourceModalities,
       cost: {
         input: rates.input,
         output: rates.output,
@@ -143,17 +142,11 @@ export function buildRuntimeCatalog(catalog: ModelsCatalog = CLINE_PASS_CATALOG)
       cacheReadSupported: rates.cacheRead !== null,
       cacheWriteSupported: rates.cacheWrite !== null,
       pricingSource: model.pricingSource,
+      pricingTiers: structuredClone(pricingTiers),
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
     });
   }
 
   return { models, issues };
-}
-
-export function reportRuntimeCatalogIssues(
-  issues: readonly string[],
-  warn: (message: string) => void = console.warn,
-): void {
-  for (const issue of issues) warn(`[cline-pass] skipped catalog entry: ${issue}`);
 }

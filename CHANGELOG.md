@@ -8,7 +8,8 @@
   cache rates, input modalities, and model-specific reasoning effort maps.
 - Add OpenAI-compatible image input serialization for vision-capable models and
   explicit placeholders for images sent to text-only models.
-- Separate cached and uncached token usage and cost accounting.
+- Separate cached and uncached token usage and select context-dependent pricing
+  tiers during reference cost accounting.
 - Keep a conservative 16,384-token request default while exposing each model's
   current maximum output capability.
 - Add read-only catalog drift/proposal commands and scheduled validation.

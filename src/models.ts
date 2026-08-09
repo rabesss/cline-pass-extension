@@ -1,10 +1,10 @@
 import { DEFAULT_MODEL, PROVIDER_ID, REASONING_LEVELS } from "./constants.js";
-import { buildRuntimeCatalog, reportRuntimeCatalogIssues } from "./model-registry.js";
+import { buildRuntimeCatalog } from "./model-registry.js";
 import type { ClinePassModel, ReasoningLevel, ReasoningOption, RuntimeModel, StreamOptions } from "./types.js";
 import { stringValue } from "./utils.js";
 
 const runtimeCatalog = buildRuntimeCatalog();
-reportRuntimeCatalogIssues(runtimeCatalog.issues);
+for (const issue of runtimeCatalog.issues) console.warn(`[cline-pass] skipped catalog entry: ${issue}`);
 
 export const CLINE_PASS_MODELS: ClinePassModel[] = runtimeCatalog.models;
 

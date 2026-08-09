@@ -141,7 +141,10 @@ retain a conservative 16,384-token default. An explicit lower or higher
 ### Catalog Sources And Pricing
 
 `models.json` is a reviewed offline snapshot. Runtime registration does not
-fetch the network. Its source boundaries are:
+fetch the network. Selector IDs, OMP-supported input modes, reasoning efforts,
+and flat display costs are derived from the wire ID, source modalities,
+reasoning options, and first pricing tier instead of being duplicated in every
+catalog row. Its source boundaries are:
 
 - Cline's public recommended-models endpoint: current Cline Pass membership,
   display descriptions, and ordering.
@@ -153,9 +156,10 @@ fetch the network. Its source boundaries are:
 
 Cline Pass remains a flat subscription with usage limits; these prices are
 reference quota values, not an additional pay-as-you-go bill. OMP/Pi accepts one
-flat rate per token dimension, so the first documented pricing tier is used at
-runtime and all tiers remain preserved in `models.json`. A missing cache rate is
-stored as unsupported rather than treated as a source price of zero.
+flat model-metadata rate per token dimension, so it displays the first documented
+tier. The adapter's usage accounting selects the matching context tier; all tiers
+remain preserved in `models.json`. A missing cache rate is stored as unsupported
+rather than treated as a source price of zero.
 
 At the current snapshot, Qwen3.8 Max is live but absent from Cline's pricing
 table, so its row explicitly uses the matching models.dev rate as a fallback.

@@ -28,6 +28,19 @@ export interface Cost {
   cacheWrite: number;
 }
 
+export interface ReferenceRates {
+  input: number;
+  output: number;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+}
+
+export interface ReferencePricingTier {
+  context: string | null;
+  maxContextTokens?: number;
+  rates: ReferenceRates;
+}
+
 export interface ClinePassModel {
   id: string;
   wireId: string;
@@ -47,6 +60,7 @@ export interface ClinePassModel {
   cacheReadSupported?: boolean;
   cacheWriteSupported?: boolean;
   pricingSource?: "cline-docs" | "models.dev-fallback";
+  pricingTiers?: ReferencePricingTier[];
   contextWindow: number;
   maxTokens: number;
 }
@@ -216,6 +230,7 @@ export interface RuntimeModel {
   maxTokens?: number;
   input?: string[];
   cost?: Cost;
+  pricingTiers?: ReferencePricingTier[];
 }
 
 export interface RuntimeMessage {

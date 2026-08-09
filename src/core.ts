@@ -7,7 +7,6 @@ export {
   PROVIDER_NAME,
 } from "./constants.js";
 export { CLINE_PASS_MODELS } from "./models.js";
-export { buildRuntimeCatalog, CLINE_PASS_CATALOG, reportRuntimeCatalogIssues } from "./model-registry.js";
 export { buildProviderConfig } from "./provider.js";
 export {
   findClinePassProvider,

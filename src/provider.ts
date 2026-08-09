@@ -14,15 +14,14 @@ export function buildProviderConfig(options: BuildProviderOptions = {}): Provide
     getApiKey: getClinePassApiKey,
   };
   const apiKey = stringValue(options.apiKey) || CLINE_PASS_API_KEY_ENV_VAR;
-  const config: ProviderConfig = {
+  return {
     name: PROVIDER_NAME,
     baseUrl,
+    apiKey,
     authHeader: true,
     api: "cline-pass-custom",
     streamSimple: options.streamSimple || createStreamClinePass({ ...options, baseUrl, oauth, apiKey }),
     oauth,
     models: CLINE_PASS_MODELS,
   };
-  config.apiKey = apiKey;
-  return config;
 }

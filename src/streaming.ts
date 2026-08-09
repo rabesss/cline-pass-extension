@@ -512,11 +512,17 @@ function applyUsage(usage: Usage, source?: JsonRecord, model: RuntimeModel = {})
   const reasoningTokens = source?.completion_tokens_details?.reasoning_tokens;
   if (typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)) usage.reasoning = Math.max(0, reasoningTokens);
   usage.totalTokens = Math.max(0, numberValue(source?.total_tokens)) || usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
-  if (!model?.cost) return;
-  usage.cost.input = (model.cost.input / 1_000_000) * usage.input;
-  usage.cost.output = (model.cost.output / 1_000_000) * usage.output;
-  usage.cost.cacheRead = (model.cost.cacheRead / 1_000_000) * usage.cacheRead;
-  usage.cost.cacheWrite = (model.cost.cacheWrite / 1_000_000) * usage.cacheWrite;
+  const tierRates = model.pricingTiers?.find(
+    tier => tier.maxContextTokens === undefined || promptTokens <= tier.maxContextTokens,
+  )?.rates;
+  const rates = tierRates
+    ? { ...tierRates, cacheRead: tierRates.cacheRead ?? 0, cacheWrite: tierRates.cacheWrite ?? 0 }
+    : model.cost;
+  if (!rates) return;
+  usage.cost.input = (rates.input / 1_000_000) * usage.input;
+  usage.cost.output = (rates.output / 1_000_000) * usage.output;
+  usage.cost.cacheRead = (rates.cacheRead / 1_000_000) * usage.cacheRead;
+  usage.cost.cacheWrite = (rates.cacheWrite / 1_000_000) * usage.cacheWrite;
   usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 

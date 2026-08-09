@@ -71,20 +71,23 @@ function recommendedFixture(sourceCatalog = catalog) {
 function modelsDevFixture(sourceCatalog = catalog) {
   return {
     openrouter: {
-      models: Object.fromEntries(sourceCatalog.models.map(model => [model.upstreamId, {
-        name: model.name,
-        tool_call: true,
-        reasoning: model.reasoning,
-        reasoning_options: model.reasoningOptions,
-        modalities: { input: model.sourceModalities },
-        limit: { context: model.contextWindow, output: model.maxTokens },
-        cost: {
-          input: model.cost.input,
-          output: model.cost.output,
-          cache_read: model.cost.cacheRead,
-          cache_write: model.cost.cacheWrite,
-        },
-      }])),
+      models: Object.fromEntries(sourceCatalog.models.map(model => {
+        const rates = model.pricingTiers[0].rates;
+        return [model.upstreamId, {
+          name: model.name,
+          tool_call: true,
+          reasoning: model.reasoning,
+          reasoning_options: model.reasoningOptions,
+          modalities: { input: model.sourceModalities },
+          limit: { context: model.contextWindow, output: model.maxTokens },
+          cost: {
+            input: rates.input,
+            output: rates.output,
+            cache_read: rates.cacheRead,
+            cache_write: rates.cacheWrite,
+          },
+        }];
+      })),
     },
   };
 }
@@ -167,11 +170,11 @@ test("committed validation rejects count, pricing, and selector corruption", () 
   assert.throws(() => validateCommittedCatalog(badCount), /model count/);
 
   const badPrice = structuredClone(catalog);
-  badPrice.models[0].cost.input = -1;
-  assert.throws(() => validateCommittedCatalog(badPrice), /cost.input/);
+  badPrice.models[0].pricingTiers[0].rates.input = -1;
+  assert.throws(() => validateCommittedCatalog(badPrice), /pricingTiers\[0\]\.rates\.input/);
 
   const duplicate = structuredClone(catalog);
-  duplicate.models[1].id = duplicate.models[0].id;
+  duplicate.models[1].wireId = duplicate.models[0].wireId;
   assert.throws(() => validateCommittedCatalog(duplicate), /duplicate committed model id/);
 });
 

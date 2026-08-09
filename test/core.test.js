@@ -7,9 +7,7 @@ import test from "node:test";
 
 import {
   buildProviderConfig,
-  buildRuntimeCatalog,
   CLINE_PASS_API_KEY_ENV_VAR,
-  CLINE_PASS_CATALOG,
   CLINE_PASS_MODELS,
   CLINE_PASS_OMP_AGENT_DB_ENV_VAR,
   createStreamClinePass,
@@ -25,6 +23,7 @@ import {
   verifyClinePass,
 } from "../dist/core.js";
 import clinePassExtension from "../dist/extension.js";
+import { buildRuntimeCatalog, CLINE_PASS_CATALOG } from "../dist/model-registry.js";
 
 test("buildProviderConfig registers direct Cline API models", () => {
   const config = buildProviderConfig({ apiKey: "test-token" });
@@ -89,7 +88,7 @@ test("catalog maps only supported reasoning effort values", () => {
 
 test("runtime catalog skips a corrupt row rather than inventing free pricing", () => {
   const corrupt = structuredClone(CLINE_PASS_CATALOG);
-  corrupt.models.find(model => model.id === "glm-5.2").cost.input = null;
+  corrupt.models.find(model => model.wireId === "cline-pass/glm-5.2").pricingTiers[0].rates.input = null;
 
   const result = buildRuntimeCatalog(corrupt);
 
@@ -676,24 +675,20 @@ test("createStreamClinePass keeps a conservative default request cap", async () 
   assert.equal(cappedPayload.max_tokens, 131_072);
 });
 
-test("createStreamClinePass separates cached token counts and reference costs", async () => {
+test("createStreamClinePass separates cached tokens and applies long-context pricing", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "qwen3.7-plus");
   const stream = createStreamClinePass({
     fetchImpl: async () => sseResponse([{
       choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
       usage: {
-        prompt_tokens: 100,
-        completion_tokens: 20,
-        total_tokens: 120,
-        prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+        prompt_tokens: 300_000,
+        completion_tokens: 20_000,
+        total_tokens: 320_000,
+        prompt_tokens_details: { cached_tokens: 30_000, cache_write_tokens: 10_000 },
       },
     }]),
   })(
-    {
-      id: "qwen3.8-max",
-      provider: "cline-pass",
-      maxTokens: 131_072,
-      cost: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 },
-    },
+    model,
     { messages: [{ role: "user", content: "hi" }] },
     { apiKey: "api-key-1" },
   );
@@ -708,12 +703,12 @@ test("createStreamClinePass separates cached token counts and reference costs", 
     cacheWrite: usage.cacheWrite,
     output: usage.output,
     totalTokens: usage.totalTokens,
-  }, { input: 60, cacheRead: 30, cacheWrite: 10, output: 20, totalTokens: 120 });
-  assert.ok(Math.abs(usage.cost.input - 0.00012) < Number.EPSILON);
-  assert.ok(Math.abs(usage.cost.cacheRead - 0.0000075) < Number.EPSILON);
-  assert.ok(Math.abs(usage.cost.cacheWrite - 0.000025) < Number.EPSILON);
-  assert.ok(Math.abs(usage.cost.output - 0.00012) < Number.EPSILON);
-  assert.ok(Math.abs(usage.cost.total - 0.0002725) < Number.EPSILON);
+  }, { input: 260_000, cacheRead: 30_000, cacheWrite: 10_000, output: 20_000, totalTokens: 320_000 });
+  assert.ok(Math.abs(usage.cost.input - 0.312) < 1e-12);
+  assert.ok(Math.abs(usage.cost.cacheRead - 0.0036) < 1e-12);
+  assert.ok(Math.abs(usage.cost.cacheWrite - 0.015) < 1e-12);
+  assert.ok(Math.abs(usage.cost.output - 0.096) < 1e-12);
+  assert.ok(Math.abs(usage.cost.total - 0.4266) < 1e-12);
 });
 
 test("createStreamClinePass emits streamed reasoning as thinking blocks", async () => {

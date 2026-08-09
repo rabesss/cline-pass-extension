@@ -103,6 +103,14 @@ function parsePrice(value, label) {
   return parsed;
 }
 
+function contextCeiling(context, label) {
+  if (!context || !/^(?:≤|<=)/.test(context)) return undefined;
+  const match = context.match(/^(?:≤|<=)\s*(\d+(?:\.\d+)?)\s*([KMG])?\s*tokens$/i);
+  assertExtraction(match, `${label} has an unsupported context tier`);
+  const scale = { K: 1024, M: 1024 ** 2, G: 1024 ** 3 }[match[2]?.toUpperCase()] ?? 1;
+  return Math.round(Number(match[1]) * scale);
+}
+
 export function extractClinePassDocs(source) {
   assertExtraction(
     typeof source === "string" && source.includes('title: "ClinePass"') && source.includes("## Models"),
@@ -137,8 +145,11 @@ export function extractClinePassDocs(source) {
     const model = modelRows.find(entry => entry.name === name);
     assertExtraction(model, `reference pricing row ${index} does not match a documented model: ${name}`);
     const tiers = pricingById.get(model.id) ?? [];
+    const context = contextMatch?.[1] ?? null;
+    const maxContextTokens = contextCeiling(context, `${name}.context`);
     tiers.push({
-      context: contextMatch?.[1] ?? null,
+      context,
+      ...(maxContextTokens === undefined ? {} : { maxContextTokens }),
       rates: {
         input: parsePrice(input, `${name}.input`),
         output: parsePrice(output, `${name}.output`),
@@ -237,10 +248,6 @@ export function normalizeModelsDev(payload, requiredWireIds) {
     const sourceModalities = [...new Set(model.modalities.input.filter(value => typeof value === "string"))];
     assertExtraction(sourceModalities.includes("text"), `models.dev model ${upstreamId} does not advertise text input`);
     const reasoningOptions = normalizeReasoningOptions(model.reasoning_options, `models.dev model ${upstreamId}`);
-    const effortOption = reasoningOptions.find(option => option.type === "effort");
-    const reasoningEfforts = effortOption
-      ? effortOption.values
-      : [];
 
     return {
       slug,
@@ -248,7 +255,6 @@ export function normalizeModelsDev(payload, requiredWireIds) {
       name: requiredString(model.name, `models.dev model ${upstreamId}.name`),
       reasoning: model.reasoning === true,
       reasoningOptions,
-      reasoningEfforts,
       sourceModalities,
       contextWindow: model.limit.context,
       maxTokens: Math.floor(model.limit.output),
@@ -268,20 +274,14 @@ export function buildLiveModels(recommended, docs, capabilities) {
     const pricingTiers = documented?.pricingTiers?.length
       ? documented.pricingTiers
       : [{ context: null, rates: capability.rates }];
-    const input = ["text"];
-    if (capability.sourceModalities.includes("image")) input.push("image");
     return {
-      id: slug,
       wireId: entry.id,
       upstreamId: capability.upstreamId,
       name: documented?.name ?? capability.name,
       description: entry.description,
       reasoning: capability.reasoning,
       reasoningOptions: capability.reasoningOptions,
-      reasoningEfforts: capability.reasoningEfforts,
-      input,
       sourceModalities: capability.sourceModalities,
-      cost: pricingTiers[0].rates,
       pricingTiers,
       pricingSource: documented?.pricingTiers?.length ? "cline-docs" : "models.dev-fallback",
       contextWindow: capability.contextWindow,
@@ -299,36 +299,35 @@ export function validateCommittedCatalog(catalog) {
     "committed model count does not match source.recommendedModels.expectedCount",
   );
   const ids = new Set();
-  const wireIds = new Set();
   for (const [index, model] of catalog.models.entries()) {
     const label = `models.json model ${index}`;
     assertExtraction(isPlainObject(model), `${label} must be an object`);
-    requiredString(model.id, `${label}.id`);
-    requiredString(model.wireId, `${label}.wireId`);
-    assertExtraction(!ids.has(model.id), `duplicate committed model id ${model.id}`);
-    assertExtraction(!wireIds.has(model.wireId), `duplicate committed wire id ${model.wireId}`);
-    ids.add(model.id);
-    wireIds.add(model.wireId);
-    assertExtraction(model.wireId === `cline-pass/${model.id}`, `${label}.wireId does not match id`);
-    assertExtraction(Array.isArray(model.input) && model.input.includes("text"), `${label}.input must include text`);
-    assertExtraction(Array.isArray(model.sourceModalities), `${label}.sourceModalities must be an array`);
-    assertExtraction(typeof model.reasoning === "boolean", `${label}.reasoning must be boolean`);
-    const reasoningOptions = normalizeReasoningOptions(model.reasoningOptions, label);
-    assertExtraction(Array.isArray(model.reasoningEfforts), `${label}.reasoningEfforts must be an array`);
-    const effortOption = reasoningOptions.find(option => option.type === "effort");
+    const wireId = requiredString(model.wireId, `${label}.wireId`);
+    assertExtraction(wireId.startsWith("cline-pass/"), `${label}.wireId must use the cline-pass prefix`);
+    const id = modelSlug(wireId);
+    assertExtraction(id, `${label}.wireId has an empty model id`);
+    assertExtraction(!ids.has(id), `duplicate committed model id ${id}`);
+    ids.add(id);
     assertExtraction(
-      JSON.stringify(model.reasoningEfforts) === JSON.stringify(effortOption?.values ?? []),
-      `${label}.reasoningEfforts does not match reasoningOptions`,
+      Array.isArray(model.sourceModalities) && model.sourceModalities.includes("text"),
+      `${label}.sourceModalities must include text`,
     );
+    assertExtraction(typeof model.reasoning === "boolean", `${label}.reasoning must be boolean`);
+    normalizeReasoningOptions(model.reasoningOptions, label);
     assertExtraction(finitePositive(model.contextWindow), `${label}.contextWindow must be positive`);
     assertExtraction(finitePositive(model.maxTokens), `${label}.maxTokens must be positive`);
-    const rates = normalizeRates(model.cost, `${label}.cost`);
     assertExtraction(Array.isArray(model.pricingTiers) && model.pricingTiers.length > 0, `${label}.pricingTiers must not be empty`);
-    const firstTier = model.pricingTiers[0];
-    assertExtraction(isPlainObject(firstTier), `${label}.pricingTiers[0] must be an object`);
+    for (const [tierIndex, tier] of model.pricingTiers.entries()) {
+      assertExtraction(isPlainObject(tier), `${label}.pricingTiers[${tierIndex}] must be an object`);
+      normalizeRates(tier.rates, `${label}.pricingTiers[${tierIndex}].rates`);
+      assertExtraction(
+        tier.maxContextTokens === undefined || finitePositive(tier.maxContextTokens),
+        `${label}.pricingTiers[${tierIndex}].maxContextTokens must be positive`,
+      );
+    }
     assertExtraction(
-      JSON.stringify(rates) === JSON.stringify(normalizeRates(firstTier.rates, `${label}.pricingTiers[0].rates`)),
-      `${label}.cost does not match first-tier pricing`,
+      model.pricingTiers.length === 1 || model.pricingTiers.at(-1).maxContextTokens === undefined,
+      `${label}.pricingTiers must end with an unbounded tier`,
     );
     assertExtraction(
       model.pricingSource === "cline-docs" || model.pricingSource === "models.dev-fallback",
@@ -391,8 +390,7 @@ export async function fetchSource(
     now = () => Date.now(),
   } = {},
 ) {
-  let lastError;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     try {
       const response = await fetchImpl(url, {
         headers: { accept, "user-agent": "cline-pass-extension-model-check/1" },
@@ -422,10 +420,8 @@ export async function fetchSource(
       const retryDelay = normalized.retryAfterMs ?? 250 * 2 ** attempt;
       if (retryDelay > MAX_SOURCE_RETRY_DELAY_MS) throw normalized;
       await delay(retryDelay);
-      lastError = normalized;
     }
   }
-  throw lastError ?? transientFailure(`unable to fetch ${url}`);
 }
 
 export function exitCodeForError(error) {
