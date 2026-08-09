@@ -30,6 +30,7 @@ import type {
   ResponseLike,
   RuntimeApiKeyOptions,
 } from "./types.js";
+import { unwrapClineResponsePayload } from "./responses.js";
 import {
   expandHome,
   expiryTimeMs,
@@ -227,10 +228,10 @@ async function registerClineCredentials(
 }
 
 function credentialsFromClineAuthResponse(payload: JsonRecord, fallback: Partial<Credentials> = {}): Credentials {
-  const data = payload?.success === true && payload.data && typeof payload.data === "object" ? payload.data as JsonRecord : undefined;
-  const access = stringValue(data?.accessToken);
-  const refresh = stringValue(data?.refreshToken) || stringValue(fallback.refresh);
-  const expires = expiryTimeMs(data?.expiresAt);
+  const data = unwrapClineResponsePayload(payload);
+  const access = stringValue(data.accessToken);
+  const refresh = stringValue(data.refreshToken) || stringValue(fallback.refresh);
+  const expires = expiryTimeMs(data.expiresAt);
   if (!access || !refresh || expires === undefined) throw new Error("Cline returned an invalid authentication response.");
   const userInfo = data?.userInfo && typeof data.userInfo === "object" ? data.userInfo as JsonRecord : undefined;
   const accountId = stringValue(userInfo?.clineUserId) || stringValue(fallback.accountId) || undefined;
@@ -251,7 +252,8 @@ function resolveClineAuthBase(env: Env, override?: string): string {
 }
 
 function requestSignal(signal?: AbortSignal): AbortSignal {
-  return signal ?? AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 async function responseJson(response: ResponseLike): Promise<JsonRecord> {

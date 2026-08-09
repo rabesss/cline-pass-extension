@@ -350,6 +350,36 @@ test("OMP OAuth adapter refreshes account credentials and preserves API keys", a
   assert.equal(account.accountId, "user-1");
 });
 
+test("OMP OAuth adapter surfaces Cline refresh error envelopes", async () => {
+  await assert.rejects(
+    () => refreshClinePassCredentials(
+      { access: "workos:old-token", refresh: "invalid-refresh-token", expires: Date.now() - 60_000 },
+      { fetchImpl: async () => jsonResponse({ success: false, message: "invalid refresh token" }) },
+    ),
+    /Cline API returned an error envelope: invalid refresh token/,
+  );
+});
+
+test("OMP OAuth adapter combines caller cancellation with its request timeout", async () => {
+  const controller = new AbortController();
+
+  await assert.rejects(
+    () => refreshClinePassCredentials(
+      { access: "workos:old-token", refresh: "refresh-token", expires: Date.now() - 60_000 },
+      {
+        signal: controller.signal,
+        fetchImpl: async (_url, init) => {
+          assert.notEqual(init.signal, controller.signal);
+          controller.abort(new Error("test cancellation"));
+          assert.equal(init.signal.aborted, true);
+          throw init.signal.reason;
+        },
+      },
+    ),
+    /test cancellation/,
+  );
+});
+
 test("doctor reports missing and present ClinePass login status", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cline-pass-ext-"));
   const source = path.join(tempDir, "providers.json");

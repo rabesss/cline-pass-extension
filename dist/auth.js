@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CLINE_API_BASE, CLINE_ACCOUNT_PROVIDER_ID, CLINE_API_KEY_ENV_VAR, CLINE_PASS_ACCESS_TOKEN_ENV_VAR, CLINE_PASS_API_KEY_ENV_VAR, CLINE_PASS_OMP_AGENT_DB_ENV_VAR, CLINE_WORKOS_ACCESS_TOKEN_PREFIX, DEFAULT_SOURCE_PATH, PROVIDER_ID, TEN_YEARS_MS, } from "./constants.js";
+import { unwrapClineResponsePayload } from "./responses.js";
 import { expandHome, expiryTimeMs, isExpired, safeError, sanitizeErrorDetail, stringValue, } from "./utils.js";
 const CLINE_WORKOS_CLIENT_ID = "client_01K3A541FN8TA3EPPHTD2325AR";
 const WORKOS_API_BASE = "https://api.workos.com";
@@ -162,10 +163,10 @@ async function registerClineCredentials(fetchImpl, tokens, authBase, signal) {
     return credentialsFromClineAuthResponse(payload);
 }
 function credentialsFromClineAuthResponse(payload, fallback = {}) {
-    const data = payload?.success === true && payload.data && typeof payload.data === "object" ? payload.data : undefined;
-    const access = stringValue(data?.accessToken);
-    const refresh = stringValue(data?.refreshToken) || stringValue(fallback.refresh);
-    const expires = expiryTimeMs(data?.expiresAt);
+    const data = unwrapClineResponsePayload(payload);
+    const access = stringValue(data.accessToken);
+    const refresh = stringValue(data.refreshToken) || stringValue(fallback.refresh);
+    const expires = expiryTimeMs(data.expiresAt);
     if (!access || !refresh || expires === undefined)
         throw new Error("Cline returned an invalid authentication response.");
     const userInfo = data?.userInfo && typeof data.userInfo === "object" ? data.userInfo : undefined;
@@ -185,7 +186,8 @@ function resolveClineAuthBase(env, override) {
     return /\/api\/v1$/i.test(base) ? base : `${base}/api/v1`;
 }
 function requestSignal(signal) {
-    return signal ?? AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 async function responseJson(response) {
     const payload = await response.json().catch(() => ({}));
