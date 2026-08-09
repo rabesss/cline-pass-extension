@@ -21,6 +21,11 @@ import type {
 } from "./types.js";
 import { normalizeBaseUrl, numberValue, stringValue } from "./utils.js";
 
+const DEFAULT_REQUEST_MAX_TOKENS = 16_384;
+const NON_VISION_IMAGE_PLACEHOLDER = "[image omitted: model does not support vision]";
+const MALFORMED_IMAGE_PLACEHOLDER = "[image omitted: malformed image data]";
+const IMAGE_DATA_URL_PATTERN = /^data:image\/[a-z0-9.+-]+;base64,/i;
+
 class ClinePassEventStream implements ClinePassEventSink {
   private queue: StreamEvent[] = [];
   private waiting: Array<{ resolve: (result: IteratorResult<StreamEvent>) => void }> = [];
@@ -88,9 +93,9 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
         stream.push({ type: "start", partial: output });
         const payload: JsonRecord = {
           model: toWireModelId(model?.id || DEFAULT_MODEL),
-          messages: messagesToOpenAI(context),
+          messages: messagesToOpenAI(context, model),
           stream: true,
-          max_tokens: Math.min(options.maxTokens || model?.maxTokens || 16384, model?.maxTokens || 16384),
+          max_tokens: requestMaxTokens(model, options),
         };
         const reasoningEffort = resolveReasoningEffort(model, options);
         if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
@@ -343,7 +348,17 @@ function consumeSseLines(buffer: string, flush = false): { payloads: string[]; r
   return { payloads, rest };
 }
 
-function messagesToOpenAI(context: StreamContext = {}): JsonRecord[] {
+function requestMaxTokens(model: RuntimeModel, options: StreamOptions): number {
+  const modelMaximum = typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens) && model.maxTokens > 0
+    ? Math.floor(model.maxTokens)
+    : DEFAULT_REQUEST_MAX_TOKENS;
+  const requested = typeof options.maxTokens === "number" && Number.isFinite(options.maxTokens) && options.maxTokens > 0
+    ? Math.floor(options.maxTokens)
+    : Math.min(DEFAULT_REQUEST_MAX_TOKENS, modelMaximum);
+  return Math.min(requested, modelMaximum);
+}
+
+function messagesToOpenAI(context: StreamContext = {}, model: RuntimeModel = {}): JsonRecord[] {
   const messages: JsonRecord[] = [];
   const knownToolCallIds = new Set<string>();
   const systemPrompt = Array.isArray(context.systemPrompt) ? context.systemPrompt.join("\n\n") : stringValue(context.systemPrompt);
@@ -370,12 +385,49 @@ function messagesToOpenAI(context: StreamContext = {}): JsonRecord[] {
         content: textFromContent(message.content),
       });
     } else {
-      messages.push({ role, content: textFromContent(message.content) });
+      messages.push({
+        role,
+        content: role === "user"
+          ? userContentToOpenAI(message.content, model.input?.includes("image") === true)
+          : textFromContent(message.content),
+      });
     }
   }
 
   if (messages.length === 0) messages.push({ role: "user", content: "" });
   return messages;
+}
+
+function userContentToOpenAI(content: unknown, supportsImages: boolean): string | JsonRecord[] {
+  if (!Array.isArray(content)) return textFromContent(content);
+  const hasImage = content.some(part => part?.type === "image");
+  if (!hasImage) return textFromContent(content);
+  const parts: JsonRecord[] = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      if (part) parts.push({ type: "text", text: part });
+      continue;
+    }
+    if (part?.type === "text") {
+      const text = stringValue(part.text);
+      if (text) parts.push({ type: "text", text });
+      continue;
+    }
+    if (part?.type !== "image") continue;
+    if (!supportsImages) {
+      parts.push({ type: "text", text: NON_VISION_IMAGE_PLACEHOLDER });
+      continue;
+    }
+    const raw = stringValue(part.data) || stringValue(part.image);
+    const mimeType = stringValue(part.mimeType) || "image/png";
+    if (!raw || !mimeType.toLowerCase().startsWith("image/") || (raw.startsWith("data:") && !IMAGE_DATA_URL_PATTERN.test(raw))) {
+      parts.push({ type: "text", text: MALFORMED_IMAGE_PLACEHOLDER });
+      continue;
+    }
+    const url = raw.startsWith("data:") ? raw : `data:${mimeType};base64,${raw}`;
+    parts.push({ type: "image_url", image_url: { url } });
+  }
+  return parts.length > 0 ? parts : "";
 }
 
 function textFromContent(content: unknown): string {
@@ -444,15 +496,28 @@ function parseToolArguments(input: unknown): JsonRecord {
 }
 
 function applyUsage(usage: Usage, source?: JsonRecord, model: RuntimeModel = {}): void {
-  usage.input = numberValue(source?.prompt_tokens);
-  usage.output = numberValue(source?.completion_tokens);
+  const promptTokens = Math.max(0, numberValue(source?.prompt_tokens));
+  const promptDetails = source?.prompt_tokens_details || source?.input_tokens_details || {};
+  usage.cacheRead = Math.min(
+    promptTokens,
+    Math.max(0, numberValue(promptDetails.cached_tokens ?? source?.cache_read_input_tokens)),
+  );
+  usage.cacheWrite = Math.min(Math.max(0, promptTokens - usage.cacheRead), Math.max(0, numberValue(
+    promptDetails.cache_write_tokens ??
+      promptDetails.cache_creation_tokens ??
+      source?.cache_creation_input_tokens,
+  )));
+  usage.input = Math.max(0, promptTokens - usage.cacheRead - usage.cacheWrite);
+  usage.output = Math.max(0, numberValue(source?.completion_tokens));
   const reasoningTokens = source?.completion_tokens_details?.reasoning_tokens;
-  if (typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)) usage.reasoning = reasoningTokens;
-  usage.totalTokens = numberValue(source?.total_tokens) || usage.input + usage.output;
+  if (typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)) usage.reasoning = Math.max(0, reasoningTokens);
+  usage.totalTokens = Math.max(0, numberValue(source?.total_tokens)) || usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
   if (!model?.cost) return;
   usage.cost.input = (model.cost.input / 1_000_000) * usage.input;
   usage.cost.output = (model.cost.output / 1_000_000) * usage.output;
-  usage.cost.total = usage.cost.input + usage.cost.output;
+  usage.cost.cacheRead = (model.cost.cacheRead / 1_000_000) * usage.cacheRead;
+  usage.cost.cacheWrite = (model.cost.cacheWrite / 1_000_000) * usage.cacheWrite;
+  usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
 function defaultUsage(): Usage {

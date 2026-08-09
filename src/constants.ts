@@ -11,4 +11,4 @@ export const DEFAULT_MODEL = "glm-5.2";
 export const DEFAULT_WIRE_MODEL = "cline-pass/glm-5.2";
 export const DEFAULT_SOURCE_PATH = "~/.cline/data/settings/providers.json";
 export const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
-export const REASONING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+export const REASONING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);

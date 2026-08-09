@@ -101,22 +101,76 @@ https://api.cline.bot/api/v1
 Selectors include:
 
 ```text
+cline-pass/deepseek-v4-flash
+cline-pass/qwen3.8-max
+cline-pass/kimi-k3
+cline-pass/deepseek-v4-pro
 cline-pass/glm-5.2
 cline-pass/kimi-k2.7-code
 cline-pass/kimi-k2.6
-cline-pass/deepseek-v4-pro
-cline-pass/deepseek-v4-flash
-cline-pass/mimo-v2.5
 cline-pass/mimo-v2.5-pro
+cline-pass/mimo-v2.5
 cline-pass/minimax-m3
 cline-pass/qwen3.7-max
 cline-pass/qwen3.7-plus
 ```
 
-All registered models are marked as reasoning-capable, including `xhigh`.
-When OMP/Pi passes a reasoning level, the extension forwards it to Cline as
-OpenAI-compatible `reasoning_effort`. Streamed `delta.reasoning` content is
-emitted back to OMP/Pi as thinking blocks.
+The order follows Cline's live Cline Pass recommendation endpoint. Each model's
+context window, maximum output, input modalities, and supported reasoning
+options (effort, toggle, or token budget) come from the matching models.dev
+catalog row. The extension only forwards `reasoning_effort` when that exact
+effort is advertised upstream;
+Kimi K3 exposes OMP's current `low`, `high`, and `max` levels (`xhigh` remains a
+backward-compatible alias for `max`), and toggle-only reasoning models receive
+no unsupported effort value. The catalog preserves those models' upstream
+reasoning capability, but the OMP-facing `reasoning` control is enabled only
+when the source publishes concrete effort choices; otherwise current OMP would
+invent generic effort levels. Streamed `delta.reasoning` content is still
+emitted back to OMP/Pi as thinking blocks for every model.
+
+Vision is enabled for Qwen3.8 Max, Kimi K3, Kimi K2.7 Code, Kimi K2.6,
+MiMo-V2.5, MiniMax M3, and Qwen3.7 Plus. OMP/Pi image blocks are serialized as
+OpenAI-compatible `image_url` data URLs. Although some upstream rows advertise
+audio or video, this extension exposes only text and image because those are the
+input types supported by its OMP/Pi message adapter.
+
+The catalog advertises the real upstream output limits, but ordinary requests
+retain a conservative 16,384-token default. An explicit lower or higher
+`maxTokens` request is honored up to the selected model's advertised limit.
+
+### Catalog Sources And Pricing
+
+`models.json` is a reviewed offline snapshot. Runtime registration does not
+fetch the network. Its source boundaries are:
+
+- Cline's public recommended-models endpoint: current Cline Pass membership,
+  display descriptions, and ordering.
+- Cline's ClinePass documentation: subscription reference prices per one
+  million tokens, including cache rates and context-dependent tiers.
+- models.dev's OpenRouter catalog: context/output limits, reasoning controls,
+  input modalities, tool support, and a pricing fallback for a live model not
+  yet present in Cline's pricing table.
+
+Cline Pass remains a flat subscription with usage limits; these prices are
+reference quota values, not an additional pay-as-you-go bill. OMP/Pi accepts one
+flat rate per token dimension, so the first documented pricing tier is used at
+runtime and all tiers remain preserved in `models.json`. A missing cache rate is
+stored as unsupported rather than treated as a source price of zero.
+
+At the current snapshot, Qwen3.8 Max is live but absent from Cline's pricing
+table, so its row explicitly uses the matching models.dev rate as a fallback.
+
+Check the three public sources without changing `models.json`:
+
+```bash
+npm run models:check
+npm run models:proposal
+```
+
+Both commands are read-only. `models:check` distinguishes clean, catalog drift,
+transient network failure, and structural extraction failure. `models:proposal`
+prints a deterministic diff with `writesPerformed: false`. The scheduled GitHub
+workflow runs the same drift check.
 
 ## Commands
 

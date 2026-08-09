@@ -7,7 +7,9 @@ import test from "node:test";
 
 import {
   buildProviderConfig,
+  buildRuntimeCatalog,
   CLINE_PASS_API_KEY_ENV_VAR,
+  CLINE_PASS_CATALOG,
   CLINE_PASS_MODELS,
   CLINE_PASS_OMP_AGENT_DB_ENV_VAR,
   createStreamClinePass,
@@ -37,6 +39,65 @@ test("buildProviderConfig registers direct Cline API models", () => {
   assert.equal(config.models.find(model => model.id === "glm-5.2")?.thinkingLevelMap?.minimal, null);
 });
 
+test("committed catalog registers the current 12-model Cline Pass set", () => {
+  assert.equal(CLINE_PASS_MODELS.length, 12);
+  assert.deepEqual(CLINE_PASS_MODELS.map(model => model.wireId), CLINE_PASS_CATALOG.models.map(model => model.wireId));
+
+  const qwen = CLINE_PASS_MODELS.find(model => model.id === "qwen3.8-max");
+  assert.deepEqual(qwen.input, ["text", "image"]);
+  assert.deepEqual(qwen.sourceModalities, ["text", "image", "video"]);
+  assert.equal(qwen.contextWindow, 1_000_000);
+  assert.equal(qwen.maxTokens, 131_072);
+  assert.deepEqual(qwen.cost, { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 });
+  assert.equal(qwen.pricingSource, "models.dev-fallback");
+
+  const glm = CLINE_PASS_MODELS.find(model => model.id === "glm-5.2");
+  assert.equal(glm.contextWindow, 1_048_576);
+  assert.equal(glm.maxTokens, 128_000);
+  assert.deepEqual(glm.cost, { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 });
+  assert.equal(glm.cacheReadSupported, true);
+  assert.equal(glm.cacheWriteSupported, false);
+});
+
+test("catalog maps only supported reasoning effort values", () => {
+  const kimiK3 = CLINE_PASS_MODELS.find(model => model.id === "kimi-k3");
+  assert.equal(kimiK3.thinkingLevelMap.xhigh, "max");
+  assert.equal(kimiK3.thinkingLevelMap.max, "max");
+  assert.equal(kimiK3.thinkingLevelMap.medium, null);
+  assert.deepEqual(kimiK3.thinking, { mode: "effort", efforts: ["low", "high", "max"] });
+
+  const kimiK26 = CLINE_PASS_MODELS.find(model => model.id === "kimi-k2.6");
+  assert.equal(kimiK26.sourceReasoning, true);
+  assert.equal(kimiK26.reasoning, false);
+  assert.deepEqual(kimiK26.thinkingLevelMap, {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    high: null,
+    xhigh: null,
+    max: null,
+  });
+  assert.equal(kimiK26.thinking, undefined);
+
+  const qwen37 = CLINE_PASS_MODELS.find(model => model.id === "qwen3.7-plus");
+  assert.deepEqual(qwen37.sourceReasoningOptions, [
+    { type: "toggle" },
+    { type: "budget_tokens", min: 1, max: 262_144 },
+  ]);
+});
+
+test("runtime catalog skips a corrupt row rather than inventing free pricing", () => {
+  const corrupt = structuredClone(CLINE_PASS_CATALOG);
+  corrupt.models.find(model => model.id === "glm-5.2").cost.input = null;
+
+  const result = buildRuntimeCatalog(corrupt);
+
+  assert.equal(result.models.length, 11);
+  assert.equal(result.models.some(model => model.id === "glm-5.2"), false);
+  assert.deepEqual(result.issues, ["invalid reference pricing for glm-5.2"]);
+});
+
 test("README lists every registered Cline Pass selector", async () => {
   const readme = await fs.readFile(new URL("../README.md", import.meta.url), "utf8");
   for (const model of CLINE_PASS_MODELS) {
@@ -44,12 +105,12 @@ test("README lists every registered Cline Pass selector", async () => {
   }
 });
 
-test("buildProviderConfig uses OMP OAuth adapter by default", () => {
+test("buildProviderConfig declares its OMP env key and OAuth adapter by default", () => {
   const config = withProcessEnv({ CLINE_PASS_API_KEY: "", CLINE_API_KEY: "", CLINE_PASS_ACCESS_TOKEN: "" }, () =>
     buildProviderConfig(),
   );
 
-  assert.equal(config.apiKey, undefined);
+  assert.equal(config.apiKey, CLINE_PASS_API_KEY_ENV_VAR);
   assert.equal(config.oauth.name, "Cline Pass");
   assert.equal(typeof config.oauth.login, "function");
   assert.equal(typeof config.oauth.refreshToken, "function");
@@ -548,6 +609,113 @@ test("createStreamClinePass omits unsupported minimal reasoning effort", async (
   assert.equal("reasoning_effort" in payload, false);
 });
 
+test("createStreamClinePass omits effort controls for toggle-only reasoning models", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "kimi-k2.6");
+  const payload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { reasoning: "high" });
+
+  assert.equal("reasoning_effort" in payload, false);
+});
+
+test("createStreamClinePass maps Kimi K3 xhigh reasoning to max", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "kimi-k3");
+  const payload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { reasoning: "xhigh" });
+
+  assert.equal(payload.reasoning_effort, "max");
+});
+
+test("createStreamClinePass accepts OMP's current max reasoning level", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "kimi-k3");
+  const payload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { reasoning: "max" });
+
+  assert.equal(payload.reasoning_effort, "max");
+});
+
+test("createStreamClinePass serializes OMP image blocks for vision models", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "qwen3.8-max");
+  const payload = await captureStreamPayload(model, {
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "inspect these" },
+        { type: "image", data: "abc123", mimeType: "image/png" },
+        { type: "image", data: "data:image/jpeg;base64,xyz", mimeType: "image/jpeg" },
+        { type: "image", data: "", mimeType: "image/webp" },
+        { type: "image", data: "data:text/plain;base64,eHl6", mimeType: "text/plain" },
+      ],
+    }],
+  });
+
+  assert.deepEqual(payload.messages[0].content, [
+    { type: "text", text: "inspect these" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
+    { type: "image_url", image_url: { url: "data:image/jpeg;base64,xyz" } },
+    { type: "text", text: "[image omitted: malformed image data]" },
+    { type: "text", text: "[image omitted: malformed image data]" },
+  ]);
+});
+
+test("createStreamClinePass keeps an explicit placeholder for text-only models", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "glm-5.2");
+  const payload = await captureStreamPayload(model, {
+    messages: [{ role: "user", content: [{ type: "image", data: "abc123", mimeType: "image/png" }] }],
+  });
+
+  assert.deepEqual(payload.messages[0].content, [
+    { type: "text", text: "[image omitted: model does not support vision]" },
+  ]);
+});
+
+test("createStreamClinePass keeps a conservative default request cap", async () => {
+  const model = CLINE_PASS_MODELS.find(entry => entry.id === "qwen3.8-max");
+  const defaultPayload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] });
+  const explicitPayload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { maxTokens: 50_000 });
+  const cappedPayload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { maxTokens: 999_999 });
+
+  assert.equal(defaultPayload.max_tokens, 16_384);
+  assert.equal(explicitPayload.max_tokens, 50_000);
+  assert.equal(cappedPayload.max_tokens, 131_072);
+});
+
+test("createStreamClinePass separates cached token counts and reference costs", async () => {
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{
+      choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 20,
+        total_tokens: 120,
+        prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 10 },
+      },
+    }]),
+  })(
+    {
+      id: "qwen3.8-max",
+      provider: "cline-pass",
+      maxTokens: 131_072,
+      cost: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 },
+    },
+    { messages: [{ role: "user", content: "hi" }] },
+    { apiKey: "api-key-1" },
+  );
+
+  const events = [];
+  for await (const event of stream) events.push(event);
+  const usage = events.at(-1).message.usage;
+
+  assert.deepEqual({
+    input: usage.input,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    output: usage.output,
+    totalTokens: usage.totalTokens,
+  }, { input: 60, cacheRead: 30, cacheWrite: 10, output: 20, totalTokens: 120 });
+  assert.ok(Math.abs(usage.cost.input - 0.00012) < Number.EPSILON);
+  assert.ok(Math.abs(usage.cost.cacheRead - 0.0000075) < Number.EPSILON);
+  assert.ok(Math.abs(usage.cost.cacheWrite - 0.000025) < Number.EPSILON);
+  assert.ok(Math.abs(usage.cost.output - 0.00012) < Number.EPSILON);
+  assert.ok(Math.abs(usage.cost.total - 0.0002725) < Number.EPSILON);
+});
+
 test("createStreamClinePass emits streamed reasoning as thinking blocks", async () => {
   const stream = createStreamClinePass({
     fetchImpl: async () => sseResponse([
@@ -1001,6 +1169,21 @@ test("runClinePassCommand preserves json output preference", async () => {
   assert.equal(report.command, "doctor");
   assert.equal(report.json, true);
 });
+
+async function captureStreamPayload(model, context, options = {}) {
+  let payload;
+  const stream = createStreamClinePass({
+    fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]),
+  })(model, context, {
+    apiKey: "api-key-1",
+    ...options,
+    onPayload: body => {
+      payload = body;
+    },
+  });
+  for await (const _event of stream) {}
+  return payload;
+}
 
 function providerSettings(accessToken, expiresAt = Date.now() + 3_600_000) {
   return providerSettingsFor("cline-pass", accessToken, expiresAt);

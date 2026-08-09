@@ -1,29 +1,12 @@
-import { DEFAULT_MODEL, DEFAULT_WIRE_MODEL, PROVIDER_ID, REASONING_LEVELS } from "./constants.js";
+import { DEFAULT_MODEL, PROVIDER_ID, REASONING_LEVELS } from "./constants.js";
+import { buildRuntimeCatalog, reportRuntimeCatalogIssues } from "./model-registry.js";
 import type { ClinePassModel, ReasoningLevel, ReasoningOption, RuntimeModel, StreamOptions } from "./types.js";
 import { stringValue } from "./utils.js";
 
-export const CLINE_PASS_MODELS: ClinePassModel[] = ([
-  [DEFAULT_WIRE_MODEL, "GLM 5.2"],
-  ["cline-pass/kimi-k2.7-code", "Kimi K2.7 Code"],
-  ["cline-pass/kimi-k2.6", "Kimi K2.6"],
-  ["cline-pass/deepseek-v4-pro", "DeepSeek V4 Pro"],
-  ["cline-pass/deepseek-v4-flash", "DeepSeek V4 Flash"],
-  ["cline-pass/mimo-v2.5", "MiMo V2.5"],
-  ["cline-pass/mimo-v2.5-pro", "MiMo V2.5 Pro"],
-  ["cline-pass/minimax-m3", "MiniMax M3"],
-  ["cline-pass/qwen3.7-max", "Qwen3.7 Max"],
-  ["cline-pass/qwen3.7-plus", "Qwen3.7 Plus"],
-] as const).map(([wireId, name]) => ({
-  id: fromWireModelId(wireId),
-  wireId,
-  name,
-  reasoning: true,
-  thinkingLevelMap: { minimal: null, xhigh: "xhigh" },
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128000,
-  maxTokens: 16384,
-}));
+const runtimeCatalog = buildRuntimeCatalog();
+reportRuntimeCatalogIssues(runtimeCatalog.issues);
+
+export const CLINE_PASS_MODELS: ClinePassModel[] = runtimeCatalog.models;
 
 export function resolveReasoningEffort(model: RuntimeModel | undefined, options: StreamOptions): string | undefined {
   if (!model?.reasoning) return undefined;
