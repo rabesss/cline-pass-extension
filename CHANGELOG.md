@@ -4,7 +4,8 @@
 
 - Replace the removed personal-dashboard API-key URL with Cline's current
   WorkOS device-authorization flow, including Cline account token exchange and
-  refresh support for OMP/Pi `/login` credentials.
+  refresh support for OMP/Pi `/login` credentials, without repeating the
+  browser-confirmation wait message on every authorization poll.
 - Replace the hard-coded ten-model list with a reviewed offline catalog derived
   from Cline's live Cline Pass list, official pricing docs, and models.dev.
 - Add Qwen3.8 Max and Kimi K3, current context/output limits, reference pricing,

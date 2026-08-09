@@ -119,6 +119,7 @@ async function requestDeviceAuthorization(fetchImpl, signal) {
 async function pollDeviceAuthorization(fetchImpl, authorization, callbacks) {
     const deadline = Date.now() + authorization.expiresInSeconds * 1000;
     let intervalSeconds = authorization.pollIntervalSeconds;
+    let progressReported = false;
     while (Date.now() <= deadline) {
         const response = await fetchImpl(`${WORKOS_API_BASE}${WORKOS_AUTHENTICATE_PATH}`, {
             method: "POST",
@@ -142,7 +143,10 @@ async function pollDeviceAuthorization(fetchImpl, authorization, callbacks) {
         if (error === "authorization_pending" || error === "slow_down") {
             if (error === "slow_down")
                 intervalSeconds += 5;
-            await callbacks.onProgress?.("Waiting for browser authentication confirmation...");
+            if (!progressReported) {
+                await callbacks.onProgress?.("Waiting for browser authentication confirmation...");
+                progressReported = true;
+            }
             await wait(intervalSeconds * 1000, callbacks.signal);
             continue;
         }
