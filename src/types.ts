@@ -1,7 +1,11 @@
 export type Env = Record<string, string | undefined>;
 export type JsonRecord = Record<string, any>;
-export type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ReasoningOption = boolean | ReasoningLevel;
+export type SourceReasoningOption =
+  | { type: "effort"; values: string[] }
+  | { type: "toggle" }
+  | { type: "budget_tokens"; min: number; max: number };
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<ResponseLike>;
 
@@ -24,14 +28,37 @@ export interface Cost {
   cacheWrite: number;
 }
 
+export interface ReferencePricingTier {
+  context: string | null;
+  maxContextTokens?: number;
+  rates: {
+    input: number;
+    output: number;
+    cacheRead: number | null;
+    cacheWrite: number | null;
+  };
+}
+
 export interface ClinePassModel {
   id: string;
   wireId: string;
   name: string;
+  description?: string;
   reasoning: boolean;
+  sourceReasoning?: boolean;
+  sourceReasoningOptions?: SourceReasoningOption[];
   thinkingLevelMap?: Partial<Record<ReasoningLevel, string | null>>;
+  thinking?: {
+    mode: "effort";
+    efforts: ReasoningLevel[];
+  };
   input: string[];
+  sourceModalities?: string[];
   cost: Cost;
+  cacheReadSupported?: boolean;
+  cacheWriteSupported?: boolean;
+  pricingSource?: "cline-docs" | "models.dev-fallback";
+  pricingTiers?: ReferencePricingTier[];
   contextWindow: number;
   maxTokens: number;
 }
@@ -199,7 +226,9 @@ export interface RuntimeModel {
   reasoning?: boolean;
   thinkingLevelMap?: Partial<Record<ReasoningLevel, string | null>>;
   maxTokens?: number;
+  input?: string[];
   cost?: Cost;
+  pricingTiers?: ReferencePricingTier[];
 }
 
 export interface RuntimeMessage {

@@ -25,17 +25,23 @@
   "types": "./dist/extension.d.ts",
   "files": [
     "dist",
+    "models.json",
+    "scripts",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint:ts": "tsc -p tsconfig.json --noEmit",
-    "lint:js": "for file in dist/*.js test/*.js; do node --check \"$file\"; done",
+    "lint:js": "for file in dist/*.js test/*.js test/*.mjs scripts/*.mjs; do [ -e \"$file\" ] && node --check \"$file\"; done",
     "lint": "npm run lint:ts && npm run lint:js",
-    "test": "node --test",
+    "test": "node --test test/core.test.js test/model-catalog.test.mjs && node test/omp-local.test.mjs",
+    "test:omp-local": "node test/omp-local.test.mjs",
     "check": "npm run lint && npm run build && npm test",
-    "check:dist": "npm run build && git diff --exit-code -- dist && test -z \"$(git ls-files --others --exclude-standard -- dist)\""
+    "check:dist": "npm run build && git diff --exit-code -- dist && test -z \"$(git ls-files --others --exclude-standard -- dist)\"",
+    "models:check": "node scripts/sync-upstream-models.mjs",
+    "models:proposal": "node scripts/sync-upstream-models.mjs --proposal"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
