@@ -107,10 +107,14 @@ test("real OMP loads the catalog and streams through the built extension", { ski
     CLINE_PASS_IMPORT_LOCAL: "",
   };
 
+  // OMP 16.3.4 suppresses explicitly-passed --extension paths when
+  // --no-extensions is present, despite its help text. The fresh
+  // PI_CODING_AGENT_DIR above already isolates this run from discovered
+  // extensions, so discovery can stay enabled while the built extension is
+  // loaded explicitly. See issue #5.
   const listArgs = [
     "models",
     "cline-pass",
-    "--no-extensions",
     "--extension",
     extensionPath,
   ];
@@ -123,7 +127,6 @@ test("real OMP loads the catalog and streams through the built extension", { ski
   assert.doesNotMatch(list.stdout, /kimi-k2\.6\s+.*minimal,low,medium,high/);
 
   const inference = await run(ompBinary, [
-    "--no-extensions",
     "--extension",
     extensionPath,
     "--no-session",
