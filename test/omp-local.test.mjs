@@ -11,7 +11,7 @@ const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionPath = resolve(projectDir, "dist/extension.js");
 
 function findOmpBinary() {
-  if (process.env.OMP_BIN) return process.env.OMP_BIN;
+  if (process.env.OMP_BIN) return resolve(projectDir, process.env.OMP_BIN);
   const candidates = [
     process.env.HOME ? resolve(process.env.HOME, ".local/bin/omp") : undefined,
     ...(process.env.PATH ?? "").split(delimiter).map(entry => resolve(entry, "omp")),
@@ -37,9 +37,17 @@ function run(binary, args, env, timeoutMs = 30_000) {
     });
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => {
+    let settled = false;
+    let timer;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult(result);
+    };
+    timer = setTimeout(() => {
       child.kill();
-      resolveResult({ code: -1, stdout, stderr: `${stderr}\nTIMEOUT after ${timeoutMs}ms` });
+      finish({ code: -1, stdout, stderr: `${stderr}\nTIMEOUT after ${timeoutMs}ms` });
     }, timeoutMs);
     child.stdout.on("data", chunk => {
       stdout += chunk.toString("utf8");
@@ -47,9 +55,11 @@ function run(binary, args, env, timeoutMs = 30_000) {
     child.stderr.on("data", chunk => {
       stderr += chunk.toString("utf8");
     });
+    child.on("error", error => {
+      finish({ code: -1, stdout, stderr: `${stderr}\n${error.message}` });
+    });
     child.on("close", code => {
-      clearTimeout(timer);
-      resolveResult({ code, stdout, stderr });
+      finish({ code, stdout, stderr });
     });
   });
 }
