@@ -29,7 +29,9 @@ function findOmpBinary() {
 function run(binary, args, env, timeoutMs = 30_000) {
   return new Promise(resolveResult => {
     const child = spawn(binary, args, {
-      cwd: projectDir,
+      // Keep project-level package discovery out of the integration probe so
+      // success proves the absolute --extension path loaded the built file.
+      cwd: env.PI_CODING_AGENT_DIR ?? projectDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -109,8 +111,8 @@ test("real OMP loads the catalog and streams through the built extension", { ski
 
   // OMP 16.3.4 suppresses explicitly-passed --extension paths when
   // --no-extensions is present, despite its help text. The fresh
-  // PI_CODING_AGENT_DIR above already isolates this run from discovered
-  // extensions, so discovery can stay enabled while the built extension is
+  // PI_CODING_AGENT_DIR above is also the subprocess cwd, isolating both user
+  // and project-level discovery while the absolute built extension path is
   // loaded explicitly. See issue #5.
   const listArgs = [
     "models",
