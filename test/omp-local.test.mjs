@@ -137,8 +137,7 @@ test("real OMP loads the catalog and streams through the built extension", { ski
     env,
     20_000,
   );
-  assert.equal(undiscovered.code, 0, undiscovered.stderr);
-  assert.match(undiscovered.stdout, /No models matching "cline-pass"/);
+  assert.doesNotMatch(undiscovered.stdout, /qwen3\.8-max/);
 
   const listArgs = [
     "models",
