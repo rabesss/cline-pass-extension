@@ -133,10 +133,13 @@ test("real OMP loads the catalog and streams through the built extension", { ski
   // See issue #5.
   const undiscovered = await run(
     ompBinary,
-    ["models", "cline-pass"],
+    ["models", "cline-pass", "--json"],
     env,
     20_000,
   );
+  assert.equal(undiscovered.code, 0, undiscovered.stderr);
+  const undiscoveredCatalog = JSON.parse(undiscovered.stdout);
+  assert.deepEqual(undiscoveredCatalog.models, []);
   assert.doesNotMatch(undiscovered.stdout, /qwen3\.8-max/);
 
   const listArgs = [
