@@ -101,6 +101,8 @@ test("real OMP loads the catalog and streams through the built extension", { ski
   assert.ok(address && typeof address === "object");
   const env = {
     ...process.env,
+    HOME: agentDir,
+    USERPROFILE: agentDir,
     PI_CODING_AGENT_DIR: agentDir,
     CLINE_PASS_API_BASE: `http://127.0.0.1:${address.port}`,
     CLINE_PASS_API_KEY: "mock-key",
@@ -108,6 +110,17 @@ test("real OMP loads the catalog and streams through the built extension", { ski
     CLINE_PASS_ACCESS_TOKEN: "",
     CLINE_PASS_IMPORT_LOCAL: "",
   };
+  for (const key of [
+    "OMP_PROFILE",
+    "PI_PROFILE",
+    "PI_CONFIG_DIR",
+    "PI_CONFIG_FILES",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+  ]) {
+    delete env[key];
+  }
 
   // OMP 16.3.4 suppresses explicitly-passed --extension paths when
   // --no-extensions is present, despite its help text. The fresh
