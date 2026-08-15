@@ -115,9 +115,12 @@ test("real OMP loads the catalog and streams through the built extension", { ski
     "PI_PROFILE",
     "PI_CONFIG_DIR",
     "PI_CONFIG_FILES",
+    "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "XDG_STATE_HOME",
     "XDG_CACHE_HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
   ]) {
     delete env[key];
   }
@@ -125,8 +128,18 @@ test("real OMP loads the catalog and streams through the built extension", { ski
   // OMP 16.3.4 suppresses explicitly-passed --extension paths when
   // --no-extensions is present, despite its help text. The fresh
   // PI_CODING_AGENT_DIR above is also the subprocess cwd, isolating both user
-  // and project-level discovery while the absolute built extension path is
-  // loaded explicitly. See issue #5.
+  // and project-level discovery; the negative control below proves no ambient
+  // ClinePass provider is loaded before the absolute built extension path.
+  // See issue #5.
+  const undiscovered = await run(
+    ompBinary,
+    ["models", "cline-pass"],
+    env,
+    20_000,
+  );
+  assert.equal(undiscovered.code, 0, undiscovered.stderr);
+  assert.match(undiscovered.stdout, /No models matching "cline-pass"/);
+
   const listArgs = [
     "models",
     "cline-pass",
