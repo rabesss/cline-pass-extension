@@ -117,11 +117,11 @@ cline-pass/qwen3.7-max
 cline-pass/qwen3.7-plus
 ```
 
-At runtime OMP/Pi also fetches Cline's public recommended-models roster and
-merges live `clinePass` ids with this overlay. New Cline Pass ids appear
-automatically. The optional `free` bucket is ignored; this extension remains
-Cline Pass inference only. `/clinepass models` lists the committed overlay
-used as the cold-start fallback.
+At runtime OMP fetches Cline's public recommended-models roster and merges
+live `clinePass` ids with this overlay. New Cline Pass ids appear automatically.
+Pi stays on the committed overlay. The optional `free` bucket is ignored; this
+extension remains Cline Pass inference only. `/clinepass models` lists the
+committed overlay used as the cold-start fallback.
 
 The live roster order is authoritative when discovery succeeds. Each known
 model's context window, maximum output, input modalities, and supported
@@ -157,8 +157,8 @@ retain a conservative 16,384-token default. An explicit lower or higher
 Discovery fetches `/ai/cline/recommended-models` on the same API base as
 inference (no auth) and merges live `clinePass` ids with this overlay. OMP
 caches the live list for about 24 hours and keeps the static `models` list as
-a fallback if discovery fails or times out. Runtime discovery never writes
-`models.json`.
+a fallback if discovery fails or times out. Pi stays on that static list.
+Runtime discovery never writes `models.json`.
 
 Selector IDs, OMP-supported input modes, reasoning efforts, and flat display
 costs for known ids are derived from the overlay's wire ID, source modalities,

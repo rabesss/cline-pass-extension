@@ -9,6 +9,7 @@
   remain the cold-start fallback. `models.json` is never auto-written.
 - Discover models from the provider base URL, keep overlay display names when
   the live roster omits them, and clone restored overlay metadata.
+- Document that OMP runs live roster discovery; Pi stays on the committed overlay.
 - Replace the removed personal-dashboard API-key URL with Cline's current
   WorkOS device-authorization flow, including Cline account token exchange and
   refresh support for OMP/Pi `/login` credentials, without repeating the

@@ -103,6 +103,8 @@ test("README lists every registered Cline Pass selector", async () => {
   const readme = await fs.readFile(new URL("../README.md", import.meta.url), "utf8");
   assert.doesNotMatch(readme, /app\.cline\.bot\/settings\/api-keys/);
   assert.match(readme, /device-authorization flow/);
+  assert.match(readme, /At runtime OMP fetches/);
+  assert.match(readme, /Pi stays on the committed overlay/);
   assert.match(readme, /recommended-models/);
   assert.match(readme, /conservative defaults/);
   assert.match(readme, /never writes\s+`models\.json`/);
