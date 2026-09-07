@@ -53,18 +53,20 @@ export function createStreamClinePass(deps = {}) {
     return function streamClinePass(model = {}, context = {}, options = {}) {
         const stream = createStream();
         async function run() {
-            const resolved = resolveRuntimeModel(model);
             const output = {
                 role: "assistant",
                 content: [],
-                api: resolved?.api,
-                provider: resolved?.provider || PROVIDER_ID,
-                model: resolved?.id || DEFAULT_MODEL,
+                provider: PROVIDER_ID,
+                model: DEFAULT_MODEL,
                 usage: defaultUsage(),
                 stopReason: "stop",
                 timestamp: now(),
             };
             try {
+                const resolved = resolveRuntimeModel(model);
+                output.api = resolved?.api;
+                output.provider = resolved?.provider || PROVIDER_ID;
+                output.model = resolved?.id || DEFAULT_MODEL;
                 if (typeof fetchImpl !== "function") {
                     throw new Error("global fetch is not available; use Node 18+ or a runtime with fetch");
                 }

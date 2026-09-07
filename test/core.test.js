@@ -788,6 +788,25 @@ test("resolveRuntimeModel clones overlay metadata so host mutation cannot corrup
   assert.equal(glm.pricingTiers[0].rates.input, originalTierInput);
 });
 
+test("resolveRuntimeModel keeps host functions instead of cloning the whole model", () => {
+  const tokenizer = () => [];
+  const resolved = resolveRuntimeModel({
+    id: "glm-5.2",
+    provider: "cline-pass",
+    tokenizer,
+  });
+  assert.equal(resolved.tokenizer, tokenizer);
+});
+
+test("createStreamClinePass streams when the host model carries functions", async () => {
+  const payload = await captureStreamPayload(
+    { id: "glm-5.2", provider: "cline-pass", tokenizer() { return []; } },
+    { messages: [{ role: "user", content: "hi" }] },
+  );
+
+  assert.equal(payload.model, "cline-pass/glm-5.2");
+});
+
 test("createStreamClinePass accepts OMP's current max reasoning level", async () => {
   const model = CLINE_PASS_MODELS.find(entry => entry.id === "kimi-k3");
   const payload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { reasoning: "max" });

@@ -70,19 +70,21 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
     const stream = createStream();
 
     async function run(): Promise<void> {
-      const resolved = resolveRuntimeModel(model);
       const output: OutputMessage = {
         role: "assistant",
         content: [],
-        api: resolved?.api,
-        provider: resolved?.provider || PROVIDER_ID,
-        model: resolved?.id || DEFAULT_MODEL,
+        provider: PROVIDER_ID,
+        model: DEFAULT_MODEL,
         usage: defaultUsage(),
         stopReason: "stop",
         timestamp: now(),
       };
 
       try {
+        const resolved = resolveRuntimeModel(model);
+        output.api = resolved?.api;
+        output.provider = resolved?.provider || PROVIDER_ID;
+        output.model = resolved?.id || DEFAULT_MODEL;
         if (typeof fetchImpl !== "function") {
           throw new Error("global fetch is not available; use Node 18+ or a runtime with fetch");
         }

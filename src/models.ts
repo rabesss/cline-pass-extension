@@ -14,11 +14,13 @@ export function resolveRuntimeModel(model: RuntimeModel | undefined): RuntimeMod
   const catalog = id ? catalogById.get(id) : undefined;
   if (!catalog) return model ?? {};
   const restored = structuredClone(catalog);
-  const host = structuredClone(model ?? {});
-  const thinkingLevelMap = host.thinkingLevelMap ?? restored.thinkingLevelMap;
-  const pricingTiers = host.pricingTiers ?? restored.pricingTiers;
-  const input = host.input && host.input.length > 0 ? host.input : restored.input;
-  const cost = host.cost ?? restored.cost;
+  const host = model ?? {};
+  const thinkingLevelMap =
+    host.thinkingLevelMap !== undefined ? structuredClone(host.thinkingLevelMap) : restored.thinkingLevelMap;
+  const pricingTiers =
+    host.pricingTiers !== undefined ? structuredClone(host.pricingTiers) : restored.pricingTiers;
+  const input = host.input && host.input.length > 0 ? structuredClone(host.input) : restored.input;
+  const cost = host.cost !== undefined ? structuredClone(host.cost) : restored.cost;
   const maxTokens = host.maxTokens ?? restored.maxTokens;
   return {
     ...restored,
