@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fetch Cline's public recommended-models roster at runtime and merge live
+  Cline Pass ids with the committed `models.json` overlay. New ids become
+  selectable automatically; known ids keep overlay limits, reasoning, modalities,
+  and pricing. Discovery is Cline Pass only (`free` is ignored). Static models
+  remain the cold-start fallback. `models.json` is never auto-written.
 - Replace the removed personal-dashboard API-key URL with Cline's current
   WorkOS device-authorization flow, including Cline account token exchange and
   refresh support for OMP/Pi `/login` credentials, without repeating the

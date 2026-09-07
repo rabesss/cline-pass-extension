@@ -33,6 +33,7 @@ test("buildProviderConfig registers direct Cline API models", () => {
   assert.equal(config.api, "cline-pass-custom");
   assert.equal(config.authHeader, true);
   assert.equal(typeof config.streamSimple, "function");
+  assert.equal(typeof config.fetchDynamicModels, "function");
   assert.ok(config.models.some(model => model.id === "glm-5.2" && model.wireId === "cline-pass/glm-5.2"));
   assert.equal(config.models.find(model => model.id === "glm-5.2")?.thinkingLevelMap?.xhigh, "xhigh");
   assert.equal(config.models.find(model => model.id === "glm-5.2")?.thinkingLevelMap?.minimal, null);
@@ -101,6 +102,9 @@ test("README lists every registered Cline Pass selector", async () => {
   const readme = await fs.readFile(new URL("../README.md", import.meta.url), "utf8");
   assert.doesNotMatch(readme, /app\.cline\.bot\/settings\/api-keys/);
   assert.match(readme, /device-authorization flow/);
+  assert.match(readme, /recommended-models/);
+  assert.match(readme, /conservative defaults/);
+  assert.match(readme, /never writes `models\.json`/);
   for (const model of CLINE_PASS_MODELS) {
     assert.match(readme, new RegExp(`^${model.wireId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   }
@@ -634,7 +638,7 @@ test("createStreamClinePass only applies terminal streamed usage", async () => {
       },
     ]),
   })(
-    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } },
+    { id: "usage-fixture", provider: "cline-pass", maxTokens: 128, cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } },
     { messages: [{ role: "user", content: "hi" }] },
     { apiKey: "api-key-1" },
   );
@@ -654,7 +658,7 @@ test("createStreamClinePass keeps zero usage when upstream omits usage", async (
   const stream = createStreamClinePass({
     fetchImpl: async () => sseResponse([{ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }]),
   })(
-    { id: "glm-5.2", provider: "cline-pass", maxTokens: 128, cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } },
+    { id: "usage-fixture", provider: "cline-pass", maxTokens: 128, cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 } },
     { messages: [{ role: "user", content: "hi" }] },
     { apiKey: "api-key-1" },
   );
@@ -750,6 +754,16 @@ test("createStreamClinePass omits effort controls for toggle-only reasoning mode
 test("createStreamClinePass maps Kimi K3 xhigh reasoning to max", async () => {
   const model = CLINE_PASS_MODELS.find(entry => entry.id === "kimi-k3");
   const payload = await captureStreamPayload(model, { messages: [{ role: "user", content: "hi" }] }, { reasoning: "xhigh" });
+
+  assert.equal(payload.reasoning_effort, "max");
+});
+
+test("createStreamClinePass restores overlay reasoning maps when OMP strips extra fields", async () => {
+  const payload = await captureStreamPayload(
+    { id: "kimi-k3", provider: "cline-pass", reasoning: true },
+    { messages: [{ role: "user", content: "hi" }] },
+    { reasoning: "xhigh" },
+  );
 
   assert.equal(payload.reasoning_effort, "max");
 });

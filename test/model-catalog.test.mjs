@@ -14,8 +14,10 @@ import {
   normalizeModelsDev,
   normalizeRecommendedModels,
   parseRetryAfterMs,
+  RECOMMENDED_MODELS_URL,
   validateCommittedCatalog,
 } from "../scripts/model-catalog-lib.mjs";
+import { RECOMMENDED_MODELS_URL as RUNTIME_RECOMMENDED_MODELS_URL } from "../dist/constants.js";
 
 const catalogText = await readFile(new URL("../models.json", import.meta.url), "utf8");
 const catalog = JSON.parse(catalogText);
@@ -104,6 +106,7 @@ function fixtureSources(sourceCatalog = catalog) {
 
 test("catalog source extractors reproduce the committed 12-model snapshot", () => {
   validateCommittedCatalog(catalog);
+  assert.equal(RECOMMENDED_MODELS_URL, RUNTIME_RECOMMENDED_MODELS_URL);
   const { recommended, docs, capabilities } = fixtureSources();
   const liveModels = buildLiveModels(recommended, docs, capabilities);
 

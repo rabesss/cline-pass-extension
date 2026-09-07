@@ -22,5 +22,13 @@ export interface RuntimeCatalogResult {
     models: ClinePassModel[];
     issues: string[];
 }
+export interface LiveClinePassEntry {
+    wireId: string;
+    id: string;
+    name: string;
+    description: string;
+}
 export declare const CLINE_PASS_CATALOG: ModelsCatalog;
 export declare function buildRuntimeCatalog(catalog?: ModelsCatalog): RuntimeCatalogResult;
+export declare function buildUnknownLiveModel(entry: LiveClinePassEntry): ClinePassModel;
+export declare function mergeLiveRosterWithCatalog(liveEntries: readonly LiveClinePassEntry[], catalog?: ModelsCatalog): RuntimeCatalogResult;

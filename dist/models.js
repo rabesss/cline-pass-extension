@@ -5,6 +5,27 @@ const runtimeCatalog = buildRuntimeCatalog();
 for (const issue of runtimeCatalog.issues)
     console.warn(`[cline-pass] skipped catalog entry: ${issue}`);
 export const CLINE_PASS_MODELS = runtimeCatalog.models;
+const catalogById = new Map(CLINE_PASS_MODELS.map(model => [model.id, model]));
+export function resolveRuntimeModel(model) {
+    const id = fromWireModelId(model?.id);
+    const catalog = id ? catalogById.get(id) : undefined;
+    if (!catalog)
+        return model ?? {};
+    const thinkingLevelMap = model?.thinkingLevelMap ?? catalog.thinkingLevelMap;
+    const pricingTiers = model?.pricingTiers ?? catalog.pricingTiers;
+    const input = model?.input && model.input.length > 0 ? model.input : catalog.input;
+    const cost = model?.cost ?? catalog.cost;
+    const maxTokens = model?.maxTokens ?? catalog.maxTokens;
+    return {
+        ...catalog,
+        ...model,
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+        ...(pricingTiers ? { pricingTiers } : {}),
+        ...(input ? { input } : {}),
+        ...(cost ? { cost } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+    };
+}
 export function resolveReasoningEffort(model, options) {
     if (!model?.reasoning)
         return undefined;

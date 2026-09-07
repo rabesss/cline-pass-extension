@@ -1,6 +1,6 @@
 import { CLINE_API_BASE, DEFAULT_MODEL, PROVIDER_ID } from "./constants.js";
 import { missingApiKeyMessage, resolveRuntimeApiKey } from "./auth.js";
-import { resolveReasoningEffort, toWireModelId } from "./models.js";
+import { resolveReasoningEffort, resolveRuntimeModel, toWireModelId } from "./models.js";
 import { clineHTTPErrorMessage, nonSseStreamError, unwrapClineResponsePayload } from "./responses.js";
 import type {
   BuildProviderOptions,
@@ -70,12 +70,13 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
     const stream = createStream();
 
     async function run(): Promise<void> {
+      const resolved = resolveRuntimeModel(model);
       const output: OutputMessage = {
         role: "assistant",
         content: [],
-        api: model?.api,
-        provider: model?.provider || PROVIDER_ID,
-        model: model?.id || DEFAULT_MODEL,
+        api: resolved?.api,
+        provider: resolved?.provider || PROVIDER_ID,
+        model: resolved?.id || DEFAULT_MODEL,
         usage: defaultUsage(),
         stopReason: "stop",
         timestamp: now(),
@@ -92,18 +93,18 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
 
         stream.push({ type: "start", partial: output });
         const payload: JsonRecord = {
-          model: toWireModelId(model?.id || DEFAULT_MODEL),
-          messages: messagesToOpenAI(context, model),
+          model: toWireModelId(resolved?.id || DEFAULT_MODEL),
+          messages: messagesToOpenAI(context, resolved),
           stream: true,
-          max_tokens: requestMaxTokens(model, options),
+          max_tokens: requestMaxTokens(resolved, options),
         };
-        const reasoningEffort = resolveReasoningEffort(model, options);
+        const reasoningEffort = resolveReasoningEffort(resolved, options);
         if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
         const tools = toolsToOpenAI(context?.tools);
         if (tools.length > 0) payload.tools = tools;
         if (options.toolChoice) payload.tool_choice = options.toolChoice;
 
-        if (typeof options.onPayload === "function") await options.onPayload(payload, model);
+        if (typeof options.onPayload === "function") await options.onPayload(payload, resolved);
         const init: RequestInit = {
           method: "POST",
           headers: {
@@ -115,7 +116,7 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
         if (options.signal) init.signal = options.signal;
         const response = await fetchImpl(`${normalizeBaseUrl(apiBase)}/chat/completions`, init);
         if (typeof options.onResponse === "function") {
-          await options.onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model);
+          await options.onResponse({ status: response.status, headers: headersToRecord(response.headers) }, resolved);
         }
 
         if (!response.ok) {
@@ -124,8 +125,8 @@ export function createStreamClinePass(deps: BuildProviderOptions = {}): StreamFu
         }
 
         const result = response.body && isEventStream(response.headers)
-          ? await consumeOpenAIStream(response.body, output, stream, model)
-          : await consumeOpenAINonStreamingFallback(response, output, stream, model);
+          ? await consumeOpenAIStream(response.body, output, stream, resolved)
+          : await consumeOpenAINonStreamingFallback(response, output, stream, resolved);
         output.stopReason = result.toolUse ? "toolUse" : finishReason(result.finishReason);
         stream.push({ type: "done", reason: output.stopReason, message: output });
       } catch (error) {

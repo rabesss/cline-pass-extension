@@ -100,7 +100,7 @@ The extension registers provider `cline-pass`:
 https://api.cline.bot/api/v1
 ```
 
-Selectors include:
+Selectors include the committed overlay snapshot:
 
 ```text
 cline-pass/deepseek-v4-flash
@@ -117,11 +117,22 @@ cline-pass/qwen3.7-max
 cline-pass/qwen3.7-plus
 ```
 
-The order follows Cline's live Cline Pass recommendation endpoint. Each model's
-context window, maximum output, input modalities, and supported reasoning
-options (effort, toggle, or token budget) come from the matching models.dev
-catalog row. The extension only forwards `reasoning_effort` when that exact
-effort is advertised upstream;
+At runtime OMP/Pi also fetches Cline's public recommended-models roster and
+merges live `clinePass` ids with this overlay. New Cline Pass ids appear
+automatically. The optional `free` bucket is ignored; this extension remains
+Cline Pass inference only. `/clinepass models` lists the committed overlay
+used as the cold-start fallback.
+
+The live roster order is authoritative when discovery succeeds. Each known
+model's context window, maximum output, input modalities, and supported
+reasoning options (effort, toggle, or token budget) come from the matching
+overlay row (originally sourced from models.dev). Newly advertised ids that
+are not yet in `models.json` are still selectable with conservative defaults:
+text plus tools, 128,000-token context, 8,192-token output cap, no invented
+reasoning efforts, and unpriced reference cost (zeros, not advertised as
+free). Refresh the overlay with the read-only drift tools below when you want
+richer metadata committed. The extension only forwards `reasoning_effort`
+when that exact effort is advertised upstream;
 Kimi K3 exposes OMP's current `low`, `high`, and `max` levels (`xhigh` remains a
 backward-compatible alias for `max`), and toggle-only reasoning models receive
 no unsupported effort value. The catalog preserves those models' upstream
@@ -142,11 +153,15 @@ retain a conservative 16,384-token default. An explicit lower or higher
 
 ### Catalog Sources And Pricing
 
-`models.json` is a reviewed offline snapshot. Runtime registration does not
-fetch the network. Selector IDs, OMP-supported input modes, reasoning efforts,
-and flat display costs are derived from the wire ID, source modalities,
-reasoning options, and first pricing tier instead of being duplicated in every
-catalog row. Its source boundaries are:
+`models.json` is a reviewed offline overlay, not the sole runtime roster.
+Discovery fetches Cline's public recommended-models endpoint (no auth) and
+merges live `clinePass` ids with this overlay. OMP caches the live list for
+about 24 hours and keeps the static `models` list as a fallback if discovery
+fails or times out. Runtime discovery never writes `models.json`.
+
+Selector IDs, OMP-supported input modes, reasoning efforts, and flat display
+costs for known ids are derived from the overlay's wire ID, source modalities,
+reasoning options, and first pricing tier. Overlay source boundaries are:
 
 - Cline's public recommended-models endpoint: current Cline Pass membership,
   display descriptions, and ordering.
@@ -168,7 +183,9 @@ input rate.
 At the current snapshot, Qwen3.8 Max is live but absent from Cline's pricing
 table, so its row explicitly uses the matching models.dev rate as a fallback.
 
-Check the three public sources without changing `models.json`:
+Check the three public sources without changing `models.json`. These remain
+optional metadata drift tools; they do not publish the live roster and do not
+auto-commit overlay updates:
 
 ```bash
 npm run models:check

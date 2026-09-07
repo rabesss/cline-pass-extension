@@ -57,7 +57,7 @@ export interface ClinePassModel {
     cost: Cost;
     cacheReadSupported?: boolean;
     cacheWriteSupported?: boolean;
-    pricingSource?: "cline-docs" | "models.dev-fallback";
+    pricingSource?: "cline-docs" | "models.dev-fallback" | "conservative-defaults";
     pricingTiers?: ReferencePricingTier[];
     contextWindow: number;
     maxTokens: number;
@@ -77,6 +77,7 @@ export interface ProviderConfig {
     streamSimple: StreamFunction;
     oauth: OAuthAdapter;
     models: ClinePassModel[];
+    fetchDynamicModels?: (apiKey?: string) => Promise<readonly ClinePassModel[]>;
 }
 export interface BuildProviderOptions {
     baseUrl?: string;
