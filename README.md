@@ -154,10 +154,11 @@ retain a conservative 16,384-token default. An explicit lower or higher
 ### Catalog Sources And Pricing
 
 `models.json` is a reviewed offline overlay, not the sole runtime roster.
-Discovery fetches Cline's public recommended-models endpoint (no auth) and
-merges live `clinePass` ids with this overlay. OMP caches the live list for
-about 24 hours and keeps the static `models` list as a fallback if discovery
-fails or times out. Runtime discovery never writes `models.json`.
+Discovery fetches `/ai/cline/recommended-models` on the same API base as
+inference (no auth) and merges live `clinePass` ids with this overlay. OMP
+caches the live list for about 24 hours and keeps the static `models` list as
+a fallback if discovery fails or times out. Runtime discovery never writes
+`models.json`.
 
 Selector IDs, OMP-supported input modes, reasoning efforts, and flat display
 costs for known ids are derived from the overlay's wire ID, source modalities,

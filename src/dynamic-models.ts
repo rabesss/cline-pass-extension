@@ -40,7 +40,7 @@ export function parseRecommendedClinePassRoster(payload: unknown): LiveClinePass
     entries.push({
       wireId,
       id,
-      name: typeof rawName === "string" && rawName.trim() ? rawName.trim() : id,
+      name: typeof rawName === "string" ? rawName.trim() : "",
       description: typeof rawDescription === "string" ? rawDescription.trim() : "",
     });
   }

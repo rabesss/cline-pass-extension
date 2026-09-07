@@ -9,7 +9,7 @@ export {
   UNKNOWN_LIVE_MODEL_CONTEXT_WINDOW,
   UNKNOWN_LIVE_MODEL_MAX_TOKENS,
 } from "./constants.js";
-export { CLINE_PASS_MODELS } from "./models.js";
+export { CLINE_PASS_MODELS, resolveRuntimeModel } from "./models.js";
 export { buildProviderConfig } from "./provider.js";
 export { fetchDynamicClinePassModels, parseRecommendedClinePassRoster } from "./dynamic-models.js";
 export {

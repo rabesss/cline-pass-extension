@@ -19,6 +19,7 @@ import {
   readClinePassAccessToken,
   refreshClinePassCredentials,
   resolveProvidersPath,
+  resolveRuntimeModel,
   runClinePassCommand,
   verifyClinePass,
 } from "../dist/core.js";
@@ -104,7 +105,7 @@ test("README lists every registered Cline Pass selector", async () => {
   assert.match(readme, /device-authorization flow/);
   assert.match(readme, /recommended-models/);
   assert.match(readme, /conservative defaults/);
-  assert.match(readme, /never writes `models\.json`/);
+  assert.match(readme, /never writes\s+`models\.json`/);
   for (const model of CLINE_PASS_MODELS) {
     assert.match(readme, new RegExp(`^${model.wireId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
   }
@@ -766,6 +767,23 @@ test("createStreamClinePass restores overlay reasoning maps when OMP strips extr
   );
 
   assert.equal(payload.reasoning_effort, "max");
+});
+
+test("resolveRuntimeModel clones overlay metadata so host mutation cannot corrupt the catalog", () => {
+  const glm = CLINE_PASS_MODELS.find(entry => entry.id === "glm-5.2");
+  const originalInput = glm.cost.input;
+  const originalTierInput = glm.pricingTiers[0].rates.input;
+  const resolved = resolveRuntimeModel({
+    id: "glm-5.2",
+    provider: "cline-pass",
+    reasoning: true,
+    cost: glm.cost,
+    pricingTiers: glm.pricingTiers,
+  });
+  resolved.cost.input = 999;
+  resolved.pricingTiers[0].rates.input = 999;
+  assert.equal(glm.cost.input, originalInput);
+  assert.equal(glm.pricingTiers[0].rates.input, originalTierInput);
 });
 
 test("createStreamClinePass accepts OMP's current max reasoning level", async () => {

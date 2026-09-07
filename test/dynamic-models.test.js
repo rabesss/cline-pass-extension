@@ -57,6 +57,18 @@ test("parseRecommendedClinePassRoster keeps subscription ids and ignores free pl
   }]);
 });
 
+test("parseRecommendedClinePassRoster keeps an empty live name so overlay names can win", () => {
+  const parsed = parseRecommendedClinePassRoster({
+    clinePass: [{ id: "cline-pass/glm-5.2" }],
+  });
+  assert.deepEqual(parsed, [{
+    wireId: "cline-pass/glm-5.2",
+    id: "glm-5.2",
+    name: "",
+    description: "",
+  }]);
+});
+
 test("parseRecommendedClinePassRoster fails closed on a missing subscription bucket", () => {
   assert.throws(() => parseRecommendedClinePassRoster({ free: [] }), /missing clinePass/);
   assert.throws(() => parseRecommendedClinePassRoster({ clinePass: [] }), /no valid clinePass ids/);
@@ -105,6 +117,14 @@ test("mergeLiveRosterWithCatalog overlays known metadata and applies conservativ
   assert.equal(liveKimi.thinkingLevelMap.xhigh, "max");
 });
 
+test("mergeLiveRosterWithCatalog keeps overlay names when live omits them", () => {
+  const glm = CLINE_PASS_CATALOG.models.find(model => model.wireId === "cline-pass/glm-5.2");
+  const merged = mergeLiveRosterWithCatalog([
+    { wireId: glm.wireId, id: "glm-5.2", name: "", description: "" },
+  ]);
+  assert.equal(merged.models[0].name, glm.name);
+});
+
 test("fetchDynamicClinePassModels uses the public roster URL, mock payload, and no auth header", async () => {
   const glm = CLINE_PASS_CATALOG.models.find(model => model.wireId === "cline-pass/glm-5.2");
   let captured;
@@ -145,12 +165,17 @@ test("fetchDynamicClinePassModels fails over to the caller on HTTP and empty ros
 
 test("buildProviderConfig wires fetchDynamicModels and keeps static models as fallback", async () => {
   const glm = CLINE_PASS_CATALOG.models.find(model => model.wireId === "cline-pass/glm-5.2");
+  let capturedUrl;
   const config = buildProviderConfig({
     apiKey: "test-token",
-    fetchImpl: async () => jsonResponse(recommendedPayload([
-      { id: "cline-pass/brand-new-model", name: "Brand New", description: "Live only" },
-      liveEntry(glm),
-    ])),
+    baseUrl: "http://127.0.0.1:9/api/v1/",
+    fetchImpl: async url => {
+      capturedUrl = url;
+      return jsonResponse(recommendedPayload([
+        { id: "cline-pass/brand-new-model", name: "Brand New", description: "Live only" },
+        liveEntry(glm),
+      ]));
+    },
   });
 
   assert.equal(typeof config.fetchDynamicModels, "function");
@@ -158,5 +183,6 @@ test("buildProviderConfig wires fetchDynamicModels and keeps static models as fa
   assert.equal(config.models.length, 12);
 
   const dynamic = await config.fetchDynamicModels("secret-should-not-be-sent");
+  assert.equal(capturedUrl, "http://127.0.0.1:9/api/v1/ai/cline/recommended-models");
   assert.deepEqual(dynamic.map(model => model.id), ["brand-new-model", "glm-5.2"]);
 });

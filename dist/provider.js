@@ -1,9 +1,9 @@
-import { CLINE_API_BASE, CLINE_PASS_API_KEY_ENV_VAR, PROVIDER_NAME } from "./constants.js";
+import { CLINE_API_BASE, CLINE_PASS_API_KEY_ENV_VAR, PROVIDER_NAME, RECOMMENDED_MODELS_PATH } from "./constants.js";
 import { getClinePassApiKey, loginClinePass, refreshClinePassCredentials } from "./auth.js";
 import { fetchDynamicClinePassModels } from "./dynamic-models.js";
 import { CLINE_PASS_MODELS } from "./models.js";
 import { createStreamClinePass } from "./streaming.js";
-import { stringValue } from "./utils.js";
+import { normalizeBaseUrl, stringValue } from "./utils.js";
 export function buildProviderConfig(options = {}) {
     const baseUrl = stringValue(options.baseUrl) || process.env.CLINE_PASS_API_BASE || CLINE_API_BASE;
     const oauth = options.oauth || {
@@ -22,7 +22,10 @@ export function buildProviderConfig(options = {}) {
         streamSimple: options.streamSimple || createStreamClinePass({ ...options, baseUrl, oauth, apiKey }),
         oauth,
         models: CLINE_PASS_MODELS,
-        fetchDynamicModels: () => fetchDynamicClinePassModels(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        fetchDynamicModels: () => fetchDynamicClinePassModels({
+            url: `${normalizeBaseUrl(baseUrl)}${RECOMMENDED_MODELS_PATH}`,
+            ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+        }),
     };
 }
 //# sourceMappingURL=provider.js.map

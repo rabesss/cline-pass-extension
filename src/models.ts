@@ -13,14 +13,16 @@ export function resolveRuntimeModel(model: RuntimeModel | undefined): RuntimeMod
   const id = fromWireModelId(model?.id);
   const catalog = id ? catalogById.get(id) : undefined;
   if (!catalog) return model ?? {};
-  const thinkingLevelMap = model?.thinkingLevelMap ?? catalog.thinkingLevelMap;
-  const pricingTiers = model?.pricingTiers ?? catalog.pricingTiers;
-  const input = model?.input && model.input.length > 0 ? model.input : catalog.input;
-  const cost = model?.cost ?? catalog.cost;
-  const maxTokens = model?.maxTokens ?? catalog.maxTokens;
+  const restored = structuredClone(catalog);
+  const host = structuredClone(model ?? {});
+  const thinkingLevelMap = host.thinkingLevelMap ?? restored.thinkingLevelMap;
+  const pricingTiers = host.pricingTiers ?? restored.pricingTiers;
+  const input = host.input && host.input.length > 0 ? host.input : restored.input;
+  const cost = host.cost ?? restored.cost;
+  const maxTokens = host.maxTokens ?? restored.maxTokens;
   return {
-    ...catalog,
-    ...model,
+    ...restored,
+    ...host,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(pricingTiers ? { pricingTiers } : {}),
     ...(input ? { input } : {}),

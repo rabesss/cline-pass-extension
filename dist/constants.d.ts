@@ -2,6 +2,7 @@ export declare const PROVIDER_ID = "cline-pass";
 export declare const CLINE_ACCOUNT_PROVIDER_ID = "cline";
 export declare const PROVIDER_NAME = "Cline Pass";
 export declare const CLINE_API_BASE = "https://api.cline.bot/api/v1";
+export declare const RECOMMENDED_MODELS_PATH = "/ai/cline/recommended-models";
 export declare const RECOMMENDED_MODELS_URL = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
 export declare const UNKNOWN_LIVE_MODEL_CONTEXT_WINDOW = 128000;
 export declare const UNKNOWN_LIVE_MODEL_MAX_TOKENS = 8192;
