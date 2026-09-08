@@ -36,7 +36,7 @@
     "lint:ts": "tsc -p tsconfig.json --noEmit",
     "lint:js": "for file in dist/*.js test/*.js test/*.mjs scripts/*.mjs; do [ -e \"$file\" ] && node --check \"$file\"; done",
     "lint": "npm run lint:ts && npm run lint:js",
-    "test": "node --test test/core.test.js test/model-catalog.test.mjs && node test/omp-local.test.mjs",
+    "test": "node --test test/core.test.js test/dynamic-models.test.js test/model-catalog.test.mjs && node test/omp-local.test.mjs",
     "test:omp-local": "node test/omp-local.test.mjs",
     "check": "npm run lint && npm run build && npm test",
     "check:dist": "npm run build && git diff --exit-code -- dist && test -z \"$(git ls-files --others --exclude-standard -- dist)\"",

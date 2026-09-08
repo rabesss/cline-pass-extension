@@ -1,6 +1,6 @@
 import { CLINE_API_BASE, DEFAULT_MODEL, PROVIDER_ID } from "./constants.js";
 import { missingApiKeyMessage, resolveRuntimeApiKey } from "./auth.js";
-import { resolveReasoningEffort, toWireModelId } from "./models.js";
+import { resolveReasoningEffort, resolveRuntimeModel, toWireModelId } from "./models.js";
 import { clineHTTPErrorMessage, nonSseStreamError, unwrapClineResponsePayload } from "./responses.js";
 import { normalizeBaseUrl, numberValue, stringValue } from "./utils.js";
 const DEFAULT_REQUEST_MAX_TOKENS = 16_384;
@@ -56,14 +56,17 @@ export function createStreamClinePass(deps = {}) {
             const output = {
                 role: "assistant",
                 content: [],
-                api: model?.api,
-                provider: model?.provider || PROVIDER_ID,
-                model: model?.id || DEFAULT_MODEL,
+                provider: PROVIDER_ID,
+                model: DEFAULT_MODEL,
                 usage: defaultUsage(),
                 stopReason: "stop",
                 timestamp: now(),
             };
             try {
+                const resolved = resolveRuntimeModel(model);
+                output.api = resolved?.api;
+                output.provider = resolved?.provider || PROVIDER_ID;
+                output.model = resolved?.id || DEFAULT_MODEL;
                 if (typeof fetchImpl !== "function") {
                     throw new Error("global fetch is not available; use Node 18+ or a runtime with fetch");
                 }
@@ -73,12 +76,12 @@ export function createStreamClinePass(deps = {}) {
                 }
                 stream.push({ type: "start", partial: output });
                 const payload = {
-                    model: toWireModelId(model?.id || DEFAULT_MODEL),
-                    messages: messagesToOpenAI(context, model),
+                    model: toWireModelId(resolved?.id || DEFAULT_MODEL),
+                    messages: messagesToOpenAI(context, resolved),
                     stream: true,
-                    max_tokens: requestMaxTokens(model, options),
+                    max_tokens: requestMaxTokens(resolved, options),
                 };
-                const reasoningEffort = resolveReasoningEffort(model, options);
+                const reasoningEffort = resolveReasoningEffort(resolved, options);
                 if (reasoningEffort)
                     payload.reasoning_effort = reasoningEffort;
                 const tools = toolsToOpenAI(context?.tools);
@@ -87,7 +90,7 @@ export function createStreamClinePass(deps = {}) {
                 if (options.toolChoice)
                     payload.tool_choice = options.toolChoice;
                 if (typeof options.onPayload === "function")
-                    await options.onPayload(payload, model);
+                    await options.onPayload(payload, resolved);
                 const init = {
                     method: "POST",
                     headers: {
@@ -100,15 +103,15 @@ export function createStreamClinePass(deps = {}) {
                     init.signal = options.signal;
                 const response = await fetchImpl(`${normalizeBaseUrl(apiBase)}/chat/completions`, init);
                 if (typeof options.onResponse === "function") {
-                    await options.onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model);
+                    await options.onResponse({ status: response.status, headers: headersToRecord(response.headers) }, resolved);
                 }
                 if (!response.ok) {
                     const data = await response.json().catch(() => undefined);
                     throw new Error(clineHTTPErrorMessage(response.status, data));
                 }
                 const result = response.body && isEventStream(response.headers)
-                    ? await consumeOpenAIStream(response.body, output, stream, model)
-                    : await consumeOpenAINonStreamingFallback(response, output, stream, model);
+                    ? await consumeOpenAIStream(response.body, output, stream, resolved)
+                    : await consumeOpenAINonStreamingFallback(response, output, stream, resolved);
                 output.stopReason = result.toolUse ? "toolUse" : finishReason(result.finishReason);
                 stream.push({ type: "done", reason: output.stopReason, message: output });
             }
