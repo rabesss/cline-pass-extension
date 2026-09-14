@@ -11,7 +11,7 @@ const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionPath = resolve(projectDir, "dist/extension.js");
 
 function findOmpBinary() {
-  if (process.env.OMP_BIN) return process.env.OMP_BIN;
+  if (process.env.OMP_BIN) return resolve(projectDir, process.env.OMP_BIN);
   const candidates = [
     process.env.HOME ? resolve(process.env.HOME, ".local/bin/omp") : undefined,
     ...(process.env.PATH ?? "").split(delimiter).map(entry => resolve(entry, "omp")),
@@ -29,15 +29,25 @@ function findOmpBinary() {
 function run(binary, args, env, timeoutMs = 30_000) {
   return new Promise(resolveResult => {
     const child = spawn(binary, args, {
-      cwd: projectDir,
+      // Keep project-level package discovery out of the integration probe so
+      // success proves the absolute --extension path loaded the built file.
+      cwd: env.PI_CODING_AGENT_DIR ?? projectDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
-    const timer = setTimeout(() => {
+    let settled = false;
+    let timer;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult(result);
+    };
+    timer = setTimeout(() => {
       child.kill();
-      resolveResult({ code: -1, stdout, stderr: `${stderr}\nTIMEOUT after ${timeoutMs}ms` });
+      finish({ code: -1, stdout, stderr: `${stderr}\nTIMEOUT after ${timeoutMs}ms` });
     }, timeoutMs);
     child.stdout.on("data", chunk => {
       stdout += chunk.toString("utf8");
@@ -45,9 +55,11 @@ function run(binary, args, env, timeoutMs = 30_000) {
     child.stderr.on("data", chunk => {
       stderr += chunk.toString("utf8");
     });
+    child.on("error", error => {
+      finish({ code: -1, stdout, stderr: `${stderr}\n${error.message}` });
+    });
     child.on("close", code => {
-      clearTimeout(timer);
-      resolveResult({ code, stdout, stderr });
+      finish({ code, stdout, stderr });
     });
   });
 }
@@ -99,6 +111,8 @@ test("real OMP loads the catalog and streams through the built extension", { ski
   assert.ok(address && typeof address === "object");
   const env = {
     ...process.env,
+    HOME: agentDir,
+    USERPROFILE: agentDir,
     PI_CODING_AGENT_DIR: agentDir,
     CLINE_PASS_API_BASE: `http://127.0.0.1:${address.port}`,
     CLINE_PASS_API_KEY: "mock-key",
@@ -106,11 +120,41 @@ test("real OMP loads the catalog and streams through the built extension", { ski
     CLINE_PASS_ACCESS_TOKEN: "",
     CLINE_PASS_IMPORT_LOCAL: "",
   };
+  for (const key of [
+    "OMP_PROFILE",
+    "PI_PROFILE",
+    "PI_CONFIG_DIR",
+    "PI_CONFIG_FILES",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+  ]) {
+    delete env[key];
+  }
+
+  // OMP 16.3.4 suppresses explicitly-passed --extension paths when
+  // --no-extensions is present, despite its help text. The fresh
+  // PI_CODING_AGENT_DIR above is also the subprocess cwd, isolating both user
+  // and project-level discovery; the negative control below proves no ambient
+  // ClinePass provider is loaded before the absolute built extension path.
+  // See issue #5.
+  const undiscovered = await run(
+    ompBinary,
+    ["models", "cline-pass", "--json"],
+    env,
+    20_000,
+  );
+  assert.equal(undiscovered.code, 0, undiscovered.stderr);
+  const undiscoveredCatalog = JSON.parse(undiscovered.stdout);
+  assert.deepEqual(undiscoveredCatalog.models, []);
+  assert.doesNotMatch(undiscovered.stdout, /qwen3\.8-max/);
 
   const listArgs = [
     "models",
     "cline-pass",
-    "--no-extensions",
     "--extension",
     extensionPath,
   ];
@@ -123,7 +167,6 @@ test("real OMP loads the catalog and streams through the built extension", { ski
   assert.doesNotMatch(list.stdout, /kimi-k2\.6\s+.*minimal,low,medium,high/);
 
   const inference = await run(ompBinary, [
-    "--no-extensions",
     "--extension",
     extensionPath,
     "--no-session",
