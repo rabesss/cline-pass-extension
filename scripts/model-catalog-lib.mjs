@@ -139,7 +139,9 @@ export function extractClinePassDocs(source) {
     "reference pricing",
   );
   for (const [index, row] of priceRows.entries()) {
-    const [rawName, input, output, cacheRead, cacheWrite] = row;
+    const [annotatedName, input, output, cacheRead, cacheWrite] = row;
+    // Numeric MDX footnotes annotate pricing, not the model or tier name.
+    const rawName = annotatedName.replace(/(?:<sup>\d+<\/sup>)+$/, "").trim();
     const contextMatch = rawName.match(/\s+\(([^)]+)\)$/);
     const name = contextMatch ? rawName.slice(0, contextMatch.index).trim() : rawName;
     const model = modelRows.find(entry => entry.name === name);

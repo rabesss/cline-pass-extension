@@ -266,3 +266,26 @@ test("Retry-After and error kinds map to stable maintenance outcomes", () => {
   assert.equal(exitCodeForError(new CatalogSourceError("transient", "busy")), EXIT_CODES.TRANSIENT_FAILURE);
   assert.equal(exitCodeForError(new CatalogSourceError("extraction", "shape")), EXIT_CODES.EXTRACTION_FAILURE);
 });
+
+test("pricing labels ignore numeric footnotes without losing tier qualifiers", () => {
+  const original = extractClinePassDocs(docsFixture());
+  const annotated = docsFixture().replace(
+    "| DeepSeek V4 Pro | $",
+    "| DeepSeek V4 Pro (Peak)<sup>1</sup> | $",
+  );
+  const extracted = extractClinePassDocs(annotated);
+  const expected = structuredClone(original);
+  expected.models.find(model => model.name === "DeepSeek V4 Pro").pricingTiers[0].context = "Peak";
+  assert.deepEqual(extracted, expected);
+
+  const contextFootnote = docsFixture().replace(
+    "Qwen3.7 Plus (≤ 256K tokens) | $",
+    "Qwen3.7 Plus (≤ 256K tokens)<sup>12</sup> | $",
+  );
+  assert.deepEqual(extractClinePassDocs(contextFootnote), original);
+
+  assert.throws(
+    () => extractClinePassDocs(annotated.replace("<sup>1</sup>", "<sup>unknown</sup>")),
+    /does not match a documented model/,
+  );
+});
